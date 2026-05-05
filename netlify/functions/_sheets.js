@@ -105,6 +105,17 @@ function normalizeDateCell(cell) {
     const da = m[2].padStart(2, '0');
     return `${m[3]}-${mo}-${da}`;
   }
+  // Handle textual month formats used by some automation logs, e.g.
+  // "May 5th, 2026 at 9:17 AM CDT" or "May 5, 2026 9:17 AM".
+  const cleaned = s
+    .replace(/(\d)(st|nd|rd|th)\b/gi, '$1')
+    .replace(/\bat\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const parsedMs = Date.parse(cleaned);
+  if (Number.isFinite(parsedMs)) {
+    return new Date(parsedMs).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+  }
   return null;
 }
 

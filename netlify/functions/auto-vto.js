@@ -18,9 +18,19 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { headers, rowsToday, rowsAll, today, dateCol } = await readSheetFilterToday(spreadsheetId, tab, 'A1:ZZ20000', {
+    const byRequested = await readSheetFilterToday(spreadsheetId, tab, 'A1:ZZ20000', {
       preferDateHeaders: ['Date Requested', 'date requested', 'Timestamp', 'timestamp'],
     });
+    let active = byRequested;
+    if ((byRequested.rowsToday || []).length === 0) {
+      const byTimestamp = await readSheetFilterToday(spreadsheetId, tab, 'A1:ZZ20000', {
+        preferDateHeaders: ['Timestamp', 'timestamp', 'Date Requested', 'date requested'],
+      });
+      if ((byTimestamp.rowsToday || []).length > (byRequested.rowsToday || []).length) {
+        active = byTimestamp;
+      }
+    }
+    const { headers, rowsToday, rowsAll, today, dateCol } = active;
     const dateHeader = headers[dateCol] || '(column A)';
     let today_hint = null;
     if (rowsToday.length === 0) {
