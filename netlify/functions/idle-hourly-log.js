@@ -105,7 +105,7 @@ exports.handler = async (event) => {
     });
 
     if (!values.length) {
-      return ok({ date: dateFilter, byHour: {}, groupsByHour: {}, note: 'Empty sheet range', fetched_at: new Date().toISOString() }, CACHE_SEC);
+      return ok({ date: dateFilter, byHour: {}, groups_by_hour: {}, note: 'Empty sheet range', fetched_at: new Date().toISOString() }, CACHE_SEC);
     }
 
     let col = null;
@@ -126,7 +126,7 @@ exports.handler = async (event) => {
       return ok({
         date: dateFilter,
         byHour: {},
-        groupsByHour: {},
+        groups_by_hour: {},
         note:
           'Could not detect CS_Hourly_Log columns (need Date, Hour Label or Hour Key or Hour, Available*, On Call*; Group optional). See docs/sheet-contracts.md.',
         fetched_at: new Date().toISOString(),
@@ -181,16 +181,33 @@ exports.handler = async (event) => {
     }
 
     const nowH = dateFilter === todayCTDateStr() ? currentCTHour() : null;
-    let current_hour_floor_idle = null;
-    if (nowH != null && byHour[String(nowH)]) {
-      current_hour_floor_idle = byHour[String(nowH)].idle_pct;
+
+    const hourKeys = Object.keys(byHour)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => Number.isFinite(n) && n >= 0 && n <= 23);
+    const maxDataHour = hourKeys.length ? Math.max(...hourKeys) : -1;
+
+    let current_hour_floor_idle =
+      nowH != null && byHour[String(nowH)] ? byHour[String(nowH)].idle_pct : null;
+    let kpi_hour = nowH;
+    let kpi_note = null;
+    if (nowH != null && current_hour_floor_idle == null) {
+      for (let h = nowH - 1; h >= 7; h--) {
+        const entry = byHour[String(h)];
+        if (entry && entry.idle_pct != null) {
+          current_hour_floor_idle = entry.idle_pct;
+          kpi_hour = h;
+          kpi_note = `Hour ${nowH}:00 has no rows yet; showing weighted idle for hour ${h}:00.`;
+          break;
+        }
+      }
     }
 
+    /** Operating-hours sparkline 07:00 → latest relevant hour (context vs single dip). */
     const spark = [];
     if (nowH != null) {
-      for (let i = 7; i >= 0; i--) {
-        const h = nowH - i;
-        if (h < 0) break;
+      const endHour = Math.min(21, Math.max(nowH, maxDataHour >= 0 ? maxDataHour : nowH, 12));
+      for (let h = 7; h <= endHour; h++) {
         const entry = byHour[String(h)];
         spark.push({ hour: h, idle_pct: entry ? entry.idle_pct : null });
       }
@@ -200,10 +217,14 @@ exports.handler = async (event) => {
       {
         date: dateFilter,
         ct_current_hour: nowH,
+        kpi_hour,
+        kpi_note,
         current_hour_floor_idle: current_hour_floor_idle,
         byHour,
         groups_by_hour: groupIdle,
         sparkline_hours: spark,
+        idle_source_tab: TAB,
+        idle_spreadsheet_id: IDLE_CONSUMER_SPREADSHEET_ID,
         fetched_at: new Date().toISOString(),
       },
       CACHE_SEC

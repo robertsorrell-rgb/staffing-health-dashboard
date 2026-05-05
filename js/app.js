@@ -15,6 +15,55 @@ const ENDPOINTS = [
   ['callout', '/api/callout'],
 ];
 
+/** Prefer human-readable columns; skip internal-id headers where possible. */
+const PREVIEW_TARGETED_VTO = {
+  preferred: [
+    'sent at',
+    'sent',
+    'recipient',
+    'rep',
+    'agent',
+    'name',
+    'email',
+    'queue',
+    'manager',
+    'status',
+    'shift',
+    'expires',
+    'accepted',
+  ],
+  skip: [/offer.?id/i, /^rvto_/i, /deficit.?id/i, /^def_/i],
+  maxCols: 6,
+};
+const PREVIEW_AUTO_VTO = {
+  preferred: ['date requested', 'timestamp', 'rep', 'agent', 'name', 'decision', 'hours', 'queue', 'manager'],
+  skip: [],
+  maxCols: 6,
+};
+const PREVIEW_BOBBOT = {
+  preferred: [
+    'employee_email',
+    'email',
+    'payroll',
+    'name',
+    'manager',
+    'queue',
+    'decision',
+    'saved',
+    'request date',
+    'hours',
+    'type',
+    'pto',
+  ],
+  skip: [/request.?key/i, /^pid[:|]/i, /employee.?key/i],
+  maxCols: 6,
+};
+const PREVIEW_CALLOUT = {
+  preferred: ['timestamp', 'agent', 'name', 'manager', 'queue', 'reason', 'status', 'date'],
+  skip: [],
+  maxCols: 6,
+};
+
 function formatTime(iso) {
   if (!iso) return '—';
   try {
@@ -58,7 +107,7 @@ function netStaffingMetaHtml(payload, fetchError) {
   meta.textContent = bits.join(' · ');
 }
 
-function renderHeatmap(container, payload) {
+function renderHeatmap(container, payload, options = {}) {
   container.innerHTML = '';
   if (!payload.ok || !payload.matrix || !payload.matrix.length) {
     container.innerHTML = `<p class="panel-muted" style="padding:16px;">${
@@ -67,7 +116,12 @@ function renderHeatmap(container, payload) {
     }</p>`;
     return;
   }
-  const hours = payload.hours || [];
+  const allHours = payload.hours || [];
+  let hours = allHours;
+  if (!options.extendedHours && allHours.length) {
+    const clipped = allHours.filter((h) => h >= 7 && h <= 19);
+    if (clipped.length) hours = clipped;
+  }
   const table = document.createElement('table');
   table.className = 'heatmap-table';
   const thead = document.createElement('thead');
@@ -128,12 +182,17 @@ function renderSparkline(container, spark) {
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   svg.classList.add('sparkline-svg');
   let d = '';
+  let penUp = true;
   spark.forEach((s, i) => {
     const v = s.idle_pct;
-    if (v == null) return;
+    if (v == null) {
+      penUp = true;
+      return;
+    }
     const x = pad + (i / Math.max(spark.length - 1, 1)) * (w - pad * 2);
     const y = h - pad - ((v - min) / span) * (h - pad * 2);
-    d += `${i === 0 || !d ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `;
+    d += `${penUp ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `;
+    penUp = false;
   });
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute('d', d.trim());
@@ -144,37 +203,131 @@ function renderSparkline(container, spark) {
   container.appendChild(svg);
 }
 
-function tablePreview(headers, rows, maxCols = 8) {
-  if (!headers || !headers.length) return '<p class="panel-muted">No headers</p>';
-  const hc = headers.slice(0, maxCols);
-  const th = hc.map((h) => `<th>${escapeHtml(h)}</th>`).join('');
+function escapeHtml(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Safe double-quoted attribute value for titles / tooltips. */
+function escapeAttr(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function previewTableHtml(headers, colIndices, rows) {
+  if (!headers?.length || !colIndices?.length) return '<p class="panel-muted">No preview columns</p>';
+  const th = colIndices.map((i) => `<th>${escapeHtml(String(headers[i] ?? ''))}</th>`).join('');
   const body = rows
     .slice(0, 12)
     .map((r) => {
-      const cells = hc.map((_, i) => `<td>${escapeHtml(String(r[i] ?? ''))}</td>`).join('');
+      const cells = colIndices
+        .map((i) => {
+          const raw = String(r[i] ?? '');
+          return `<td title="${escapeAttr(raw)}">${escapeHtml(raw)}</td>`;
+        })
+        .join('');
       return `<tr>${cells}</tr>`;
     })
     .join('');
-  return `<table class="preview-table"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+  return `<div class="preview-table-wrap"><table class="preview-table"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function tablePreview(headers, rows, maxCols = 6) {
+  if (!headers || !headers.length) return '<p class="panel-muted">No headers</p>';
+  const n = Math.min(maxCols, headers.length);
+  const idx = Array.from({ length: n }, (_, i) => i);
+  return previewTableHtml(headers, idx, rows);
 }
 
-function exceptionPanel(name, data, errMsg) {
+function pickPreviewIndices(headers, prefs) {
+  if (!headers?.length) return [];
+  const maxCols = Math.min(prefs?.maxCols ?? 6, headers.length);
+  const preferred = prefs?.preferred || [];
+  const skipRes = prefs?.skip || [];
+  const lower = headers.map((h) => String(h || '').trim().toLowerCase());
+  const picked = [];
+  const used = new Set();
+  const skipped = (h) => skipRes.some((re) => re.test(h));
+
+  for (const p of preferred) {
+    const pl = String(p).toLowerCase();
+    for (let i = 0; i < headers.length; i++) {
+      if (used.has(i)) continue;
+      const h = lower[i];
+      if (skipped(h)) continue;
+      if (h === pl || h.includes(pl)) {
+        picked.push(i);
+        used.add(i);
+        break;
+      }
+    }
+  }
+  for (let i = 0; i < headers.length && picked.length < maxCols; i++) {
+    if (used.has(i)) continue;
+    const h = lower[i];
+    if (skipped(h)) continue;
+    picked.push(i);
+    used.add(i);
+  }
+
+  if (!picked.length) {
+    const softSkip = [/offer.?id/i, /deficit.?id/i, /request.?key/i, /employee.?key/i, /^rvto_/i];
+    for (let i = 0; i < headers.length && picked.length < maxCols; i++) {
+      const h = lower[i];
+      if (softSkip.some((re) => re.test(h))) continue;
+      picked.push(i);
+    }
+  }
+
+  if (!picked.length) {
+    return Array.from({ length: maxCols }, (_, i) => i).filter((i) => i < headers.length);
+  }
+  return picked.slice(0, maxCols);
+}
+
+function tablePreviewPick(headers, rows, prefs) {
+  if (!headers?.length) return '<p class="panel-muted">No headers</p>';
+  const idx = pickPreviewIndices(headers, prefs || {});
+  return previewTableHtml(headers, idx, rows);
+}
+
+function exceptionPanel(name, data, errMsg, previewPrefs = null) {
   const id = name.replace(/[^a-z0-9]+/gi, '-');
-  const prev = data.headers && data.rows_preview ? tablePreview(data.headers, data.rows_preview) : '';
-  const n = data.summary?.rows_today ?? data.rows_today ?? '—';
+  const hasPreviewRows = !!(data.rows_preview && data.rows_preview.length);
+  const prev =
+    data.headers && data.rows_preview && hasPreviewRows
+      ? previewPrefs
+        ? tablePreviewPick(data.headers, data.rows_preview, previewPrefs)
+        : tablePreview(data.headers, data.rows_preview)
+      : '';
+  const n =
+    data.configured === false && !errMsg ? '—' : data.summary?.rows_today ?? data.rows_today ?? '—';
+  const hint = data.today_hint
+    ? `<p class="panel-muted" style="margin-top:6px;line-height:1.35;">${escapeHtml(data.today_hint)}</p>`
+    : '';
+  const emptyToday =
+    data.configured !== false && !errMsg && !hasPreviewRows && !data.today_hint
+      ? `<p class="panel-muted" style="margin-top:8px;">No sheet rows for today (CT) in this preview.</p>`
+      : '';
   return `
-    <div class="panel-card" id="panel-${id}">
+    <div class="panel-card panel-exception" id="panel-${id}">
       <div class="panel-title">${name}</div>
       ${errMsg ? `<p class="panel-error">${escapeHtml(errMsg)}</p>` : ''}
-      <div class="panel-sub">Rows today (date filter): <strong>${n}</strong></div>
+      <div class="panel-sub">Today: <strong>${n}</strong></div>
+      ${hint}
       ${data.configured === false && !errMsg ? `<p class="panel-muted">${data.note || 'Not configured'}</p>` : ''}
+      ${emptyToday}
       ${prev}
     </div>
   `;
+}
+
+function isHeatmapExtended() {
+  const el = document.getElementById('heatmap-extended');
+  return !!(el && el.checked);
 }
 
 let lastFetched = {};
@@ -206,7 +359,9 @@ async function loadAll() {
     note: errors['net-staffing'] || 'No data',
   };
   netStaffingMetaHtml(nsPayload, errors['net-staffing']);
-  renderHeatmap(document.getElementById('net-staffing-mount'), nsPayload);
+  renderHeatmap(document.getElementById('net-staffing-mount'), nsPayload, {
+    extendedHours: isHeatmapExtended(),
+  });
 
   const idle = results['idle-hourly-log'];
   const idleKpi = document.getElementById('idle-kpi');
@@ -221,12 +376,26 @@ async function loadAll() {
     idleErr.hidden = true;
     const v = idle?.current_hour_floor_idle;
     idleKpi.textContent = v != null ? `${v}%` : '—';
-    idleSub.textContent = idle?.note
-      ? idle.note
-      : `Date ${idle?.date || '—'} · CT hour ${idle?.ct_current_hour ?? '—'}`;
+    if (idle?.note) {
+      idleSub.innerHTML = `<span class="panel-muted">${escapeHtml(idle.note)}</span>`;
+    } else {
+      const parts = [`Date ${idle?.date || '—'} (CT)`];
+      if (idle?.ct_current_hour != null) parts.push(`now ${idle.ct_current_hour}:00`);
+      if (
+        idle?.kpi_hour != null &&
+        idle?.ct_current_hour != null &&
+        idle.kpi_hour !== idle.ct_current_hour
+      ) {
+        parts.push(`KPI hour ${idle.kpi_hour}:00`);
+      }
+      if (idle?.idle_source_tab) parts.push(`tab ${idle.idle_source_tab}`);
+      idleSub.innerHTML =
+        `<span>${escapeHtml(parts.join(' · '))}</span>` +
+        (idle?.kpi_note ? `<br/><span class="panel-muted">${escapeHtml(idle.kpi_note)}</span>` : '');
+    }
     renderSparkline(document.getElementById('idle-spark'), idle?.sparkline_hours || []);
     const gh = idle?.groups_by_hour;
-    const ch = idle?.ct_current_hour;
+    const ch = idle?.kpi_hour ?? idle?.ct_current_hour;
     if (gh && ch != null && gh[String(ch)]) {
       const entries = Object.entries(gh[String(ch)]).sort((a, b) => (b[1] || 0) - (a[1] || 0));
       idleGroups.innerHTML =
@@ -261,9 +430,14 @@ async function loadAll() {
   const coRows =
     (co.call_out_main?.rows_today ?? 0) + (co.attendance_notifications?.rows_today ?? 0);
   document.getElementById('exceptions-grid').innerHTML = [
-    exceptionPanel('Targeted VTO Bot', results['targeted-vto'] || {}, errors['targeted-vto']),
-    exceptionPanel('Automated VTO (Request Processor)', results['auto-vto'] || {}, errors['auto-vto']),
-    exceptionPanel('Bobbot (PTO)', results['bobbot'] || {}, errors['bobbot']),
+    exceptionPanel('Targeted VTO Bot', results['targeted-vto'] || {}, errors['targeted-vto'], PREVIEW_TARGETED_VTO),
+    exceptionPanel(
+      'Automated VTO (Request Processor)',
+      results['auto-vto'] || {},
+      errors['auto-vto'],
+      PREVIEW_AUTO_VTO
+    ),
+    exceptionPanel('Bobbot (PTO)', results['bobbot'] || {}, errors['bobbot'], PREVIEW_BOBBOT),
     exceptionPanel(
       'Call-out & attendance',
       {
@@ -273,7 +447,8 @@ async function loadAll() {
         headers: co.call_out_main?.headers,
         rows_preview: co.call_out_main?.rows_preview,
       },
-      errors['callout']
+      errors['callout'],
+      PREVIEW_CALLOUT
     ),
   ].join('');
 }
@@ -293,6 +468,26 @@ function tickClock() {
 tickClock();
 setInterval(tickClock, 1000);
 
+function initHeatmapToggle() {
+  const cb = document.getElementById('heatmap-extended');
+  if (!cb || cb.dataset.ready === '1') return;
+  cb.dataset.ready = '1';
+  try {
+    cb.checked = localStorage.getItem('staffingHeatmapExtended') === '1';
+  } catch {
+    cb.checked = false;
+  }
+  cb.addEventListener('change', () => {
+    try {
+      localStorage.setItem('staffingHeatmapExtended', cb.checked ? '1' : '0');
+    } catch {
+      /* ignore quota / private mode */
+    }
+    loadAll();
+  });
+}
+
+initHeatmapToggle();
 document.getElementById('btn-refresh').addEventListener('click', loadAll);
 
 loadAll();

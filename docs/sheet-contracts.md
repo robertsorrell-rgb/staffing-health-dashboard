@@ -8,6 +8,10 @@ Parsers MUST match these headers. When a bot owner changes row 1, update this do
 
 **Spreadsheet ID:** `1MlHy2dB9JieEk4q72YhsEJLwvFFYJZ_fAI7s4M7mDLk` (`IDLE_CONSUMER_SPREADSHEET_ID`)
 
+**Google access:** Share this workbook with the Sheets API service account (`client_email` in the GCP JSON credential Netlify uses). If the Idle Time card shows empty data but the tab has rows, verify sharing first.
+
+**Parser tab:** Reads `CS_Hourly_Log` by default (`IDLE_CONSUMER_HOURLY_LOG_TAB`). `CS_Live_Dash` is **not** used unless that env explicitly overrides the tab name.
+
 **Sheet URL:** `https://docs.google.com/spreadsheets/d/1MlHy2dB9JieEk4q72YhsEJLwvFFYJZ_fAI7s4M7mDLk/edit`
 
 **Tab:** `CS_Hourly_Log`  

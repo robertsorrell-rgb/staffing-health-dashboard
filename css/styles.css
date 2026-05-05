@@ -160,6 +160,17 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 16px;
+  align-items: start;
+}
+
+/** Full-width stacked cards — stops wide sheet tables from blowing out the grid and overlapping siblings. */
+.exceptions-grid {
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+.exceptions-grid > .panel-card {
+  min-width: 0;
 }
 
 .panel-card {
@@ -169,6 +180,7 @@ body {
   box-shadow: var(--shadow-md);
   padding: 16px;
   min-height: 120px;
+  min-width: 0;
 }
 .panel-title {
   font-size: 12px;
@@ -242,6 +254,32 @@ a.digest-link {
 .heatmap-meta:empty {
   display: none;
 }
+.heatmap-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 0 16px 10px;
+}
+.heatmap-toolbar .heatmap-meta {
+  padding: 0;
+  margin: 0;
+  flex: 1 1 220px;
+}
+.heatmap-toolbar .heatmap-meta:empty {
+  display: none;
+}
+.heatmap-extended-toggle {
+  font-size: 12px;
+  color: var(--text-sec);
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+}
+.heatmap-extended-toggle input {
+  margin-right: 6px;
+  vertical-align: middle;
+}
 .heatmap-table {
   border-collapse: collapse;
   font-size: 12px;
@@ -309,8 +347,23 @@ a.digest-link {
   height: 56px;
 }
 
+.preview-table-wrap {
+  margin-top: 10px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #faf9f7;
+  -webkit-overflow-scrolling: touch;
+}
+
+.preview-table-wrap .preview-table {
+  margin-top: 0;
+}
+
 .preview-table {
-  width: 100%;
+  width: max-content;
   border-collapse: collapse;
   font-size: 11px;
   margin-top: 8px;
@@ -318,11 +371,20 @@ a.digest-link {
 .preview-table th,
 .preview-table td {
   border: 1px solid var(--border);
-  padding: 4px 6px;
+  padding: 6px 8px;
   text-align: left;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
 }
 .preview-table th {
   background: var(--cream-alt);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 @media (max-width: 720px) {

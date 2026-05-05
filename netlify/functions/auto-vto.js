@@ -18,14 +18,28 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { headers, rowsToday, today } = await readSheetFilterToday(spreadsheetId, tab, 'A1:ZZ20000', {
-      preferDateHeaders: ['Timestamp', 'timestamp', 'Date Requested', 'date requested'],
+    const { headers, rowsToday, rowsAll, today, dateCol } = await readSheetFilterToday(spreadsheetId, tab, 'A1:ZZ20000', {
+      preferDateHeaders: ['Date Requested', 'date requested', 'Timestamp', 'timestamp'],
     });
+    const dateHeader = headers[dateCol] || '(column A)';
+    let today_hint = null;
+    if (rowsToday.length === 0) {
+      if (rowsAll.length === 0) {
+        today_hint = 'Sheet tab appears empty below the header row.';
+      } else if (rowsAll.length > 30) {
+        today_hint = `No rows for ${today} (CT) using “${dateHeader}”. If today should show activity, confirm that column uses CT calendar dates or try Timestamp vs Date Requested in the sheet.`;
+      } else {
+        today_hint = `No submissions for ${today} (CT).`;
+      }
+    }
+
     return ok(
       {
         configured: true,
         today,
+        date_column_used: dateHeader,
         summary: { rows_today: rowsToday.length },
+        today_hint,
         headers,
         rows_preview: rowsToday.slice(0, 50),
         fetched_at: new Date().toISOString(),

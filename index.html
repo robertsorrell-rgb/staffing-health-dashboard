@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staffing Health Dashboard</title>
-  <link rel="stylesheet" href="css/styles.css?v=2" />
+  <link rel="stylesheet" href="css/styles.css?v=4" />
 </head>
 <body>
   <header class="app-header" role="banner">
@@ -39,7 +39,13 @@
         <p class="panel-muted" style="padding:4px 16px 8px;font-size:11px;">
           Bands (tunable in <code style="font-family:var(--font-mono);">js/heatmap-bands.js</code>): green −10%…+10%; yellow under −20%…−10%; red under &lt;−20%; yellow over +10%…+25%; red over &gt;+25%.
         </p>
-        <p class="heatmap-meta" id="net-staffing-meta" aria-live="polite"></p>
+        <div class="heatmap-toolbar">
+          <p class="heatmap-meta" id="net-staffing-meta" aria-live="polite"></p>
+          <label class="heatmap-extended-toggle">
+            <input type="checkbox" id="heatmap-extended" />
+            Show hours after 19:00
+          </label>
+        </div>
         <div id="net-staffing-mount"></div>
       </div>
 
@@ -69,10 +75,10 @@
         <h2 class="section-title" id="sec2-title">Are exceptions handled cleanly?</h2>
         <span class="section-meta">VTO · PTO · Call-out</span>
       </div>
-      <div class="panel-grid" id="exceptions-grid"></div>
+      <div class="panel-grid exceptions-grid" id="exceptions-grid"></div>
     </section>
   </main>
 
-  <script type="module" src="js/app.js?v=2"></script>
+  <script type="module" src="js/app.js?v=4"></script>
 </body>
 </html>
