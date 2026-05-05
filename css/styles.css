@@ -433,6 +433,11 @@ a.digest-link {
 table.rollup-table {
   font-size: 11px;
 }
+table.rollup-table tfoot tr.rollup-sum-row td {
+  border-top: 1px solid var(--border);
+  font-weight: 600;
+  padding-top: 8px;
+}
 
 @media (max-width: 720px) {
   .main-content {

@@ -296,6 +296,13 @@ function formatHoursCeilUp(h) {
 
 function htmlVtoCombinedByGroupTable(mergedRows, sectionTitle) {
   if (!mergedRows?.length) return '';
+  let sumTh = 0;
+  let sumAh = 0;
+  for (const r of mergedRows) {
+    sumTh += Number(r.targeted_hours) || 0;
+    sumAh += Number(r.automated_hours) || 0;
+  }
+  const sumTotalCeil = Math.ceil(sumTh + sumAh);
   const h = `<thead><tr><th>Sales group</th><th class="num">Targeted h</th><th class="num">Automated h</th><th class="num">Total h</th></tr></thead>`;
   const b = mergedRows
     .map((r) => {
@@ -306,7 +313,8 @@ function htmlVtoCombinedByGroupTable(mergedRows, sectionTitle) {
       return `<tr><td title="${tip}">${escapeHtml(r.group)}</td><td class="num">${formatHoursCeilUp(r.targeted_hours)}</td><td class="num">${formatHoursCeilUp(r.automated_hours)}</td><td class="num">${String(totalCeil)}</td></tr>`;
     })
     .join('');
-  return `<div class="panel-sub rollup-section-title">${escapeHtml(sectionTitle)}</div><div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
+  const foot = `<tfoot><tr class="rollup-sum-row"><td>Total</td><td class="num">${formatHoursCeilUp(sumTh)}</td><td class="num">${formatHoursCeilUp(sumAh)}</td><td class="num">${String(sumTotalCeil)}</td></tr></tfoot>`;
+  return `<div class="panel-sub rollup-section-title">${escapeHtml(sectionTitle)}</div><div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody>${foot}</table></div>`;
 }
 
 /** Combined VTO = Offers(COMMITTED) + Requests_Submissions(Decision Approved). */
