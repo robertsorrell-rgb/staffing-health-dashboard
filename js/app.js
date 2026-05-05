@@ -285,19 +285,27 @@ function formatHoursDisplay(h) {
 }
 
 /** Combined VTO = Offers(COMMITTED) + Requests_Submissions(Decision Approved). */
-function targetedVtoPanel(data, errMsg) {
+function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
   const rollup = data.rollup || {};
   const auto = data.automated_rollup || {};
   const combined = data.combined || {};
   const sum = data.summary || {};
+  const autoSummary = autoPanel.summary || {};
+  const autoRollup = autoPanel.rollup || {};
 
   const rowsTargeted = data.configured === false && !errMsg ? '—' : sum.rows_targeted_offers_today ?? 0;
   const committedTargeted = sum.committed_targeted_today ?? rollup.committed_offers_today ?? 0;
-  const rowsAuto = sum.rows_auto_today ?? 0;
-  const approvedAuto = sum.approved_auto_today ?? auto.approved_today ?? 0;
+  const rowsAuto =
+    sum.rows_auto_today ?? autoSummary.rows_today ?? 0;
+  const approvedAuto =
+    sum.approved_auto_today ?? auto.approved_today ?? autoSummary.approved_today ?? 0;
   const hoursTargeted = sum.hours_targeted_from_offers ?? rollup.total_hours ?? 0;
-  const hoursAuto = sum.hours_auto_approved ?? auto.hours_approved_today ?? 0;
-  const hoursCombined = sum.hours_combined_approved ?? combined.hours_approved ?? 0;
+  const hoursAuto =
+    sum.hours_auto_approved ?? auto.hours_approved_today ?? autoSummary.hours_approved_today ?? 0;
+  const hoursCombined =
+    sum.hours_combined_approved ??
+    combined.hours_approved ??
+    Math.round((Number(hoursTargeted || 0) + Number(hoursAuto || 0)) * 100) / 100;
 
   let body = '';
   if (!errMsg && data.configured !== false) {
@@ -306,6 +314,9 @@ function targetedVtoPanel(data, errMsg) {
     }
     if (data.auto_fetch_error) {
       body += `<p class="panel-error">Requests_Submissions tab: ${escapeHtml(data.auto_fetch_error)}</p>`;
+    }
+    if (autoPanelErr && !data.auto_fetch_error) {
+      body += `<p class="panel-error">Automated panel fallback: ${escapeHtml(autoPanelErr)}</p>`;
     }
 
     body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours today</span> <strong class="rollup-total-value">${formatHoursDisplay(hoursCombined)} h</strong></div>`;
@@ -334,7 +345,7 @@ function targetedVtoPanel(data, errMsg) {
       body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
     }
 
-    const ar = (auto.approved_rows || []).slice(0, 25);
+    const ar = (auto.approved_rows || autoRollup.approved_rows || []).slice(0, 25);
     if (ar.length) {
       body += `<div class="panel-sub rollup-section-title">Automated approvals detail (Requests_Submissions)</div>`;
       const h = `<thead><tr><th>Rep (D)</th><th>Sales group / Role (E)</th><th class="num">Hours (I)</th><th>Date Requested (F)</th></tr></thead>`;
@@ -348,7 +359,9 @@ function targetedVtoPanel(data, errMsg) {
   const metaBits = [];
   if (data.offers_tab) metaBits.push(`Offers: ${escapeHtml(data.offers_tab)}`);
   if (data.auto_tab) metaBits.push(`Automated: ${escapeHtml(data.auto_tab)}`);
-  if (data.auto_date_column_used) metaBits.push(`Automated date filter: ${escapeHtml(data.auto_date_column_used)}`);
+  if (data.auto_date_column_used || autoPanel.date_column_used) {
+    metaBits.push(`Automated date filter: ${escapeHtml(data.auto_date_column_used || autoPanel.date_column_used)}`);
+  }
 
   return `
     <div class="panel-card panel-exception" id="panel-targeted-vto-bot">
@@ -499,12 +512,11 @@ async function loadAll() {
   const coRows =
     (co.call_out_main?.rows_today ?? 0) + (co.attendance_notifications?.rows_today ?? 0);
   document.getElementById('exceptions-grid').innerHTML = [
-    targetedVtoPanel(results['targeted-vto'] || {}, errors['targeted-vto']),
-    exceptionPanel(
-      'Automated VTO (Request Processor)',
+    targetedVtoPanel(
+      results['targeted-vto'] || {},
+      errors['targeted-vto'],
       results['auto-vto'] || {},
-      errors['auto-vto'],
-      PREVIEW_AUTO_VTO
+      errors['auto-vto']
     ),
     exceptionPanel('Bobbot (PTO)', results['bobbot'] || {}, errors['bobbot'], PREVIEW_BOBBOT),
     exceptionPanel(
