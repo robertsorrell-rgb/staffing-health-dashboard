@@ -16,25 +16,6 @@ const ENDPOINTS = [
 ];
 
 /** Prefer human-readable columns; skip internal-id headers where possible. */
-const PREVIEW_TARGETED_VTO = {
-  preferred: [
-    'sent at',
-    'sent',
-    'recipient',
-    'rep',
-    'agent',
-    'name',
-    'email',
-    'queue',
-    'manager',
-    'status',
-    'shift',
-    'expires',
-    'accepted',
-  ],
-  skip: [/offer.?id/i, /^rvto_/i, /deficit.?id/i, /^def_/i],
-  maxCols: 6,
-};
 const PREVIEW_AUTO_VTO = {
   preferred: ['date requested', 'timestamp', 'rep', 'agent', 'name', 'decision', 'hours', 'queue', 'manager'],
   skip: [],
@@ -294,6 +275,74 @@ function tablePreviewPick(headers, rows, prefs) {
   return previewTableHtml(headers, idx, rows);
 }
 
+function formatHoursDisplay(h) {
+  if (h == null || Number.isNaN(Number(h))) return '—';
+  const n = Math.round(Number(h) * 100) / 100;
+  if (Number.isInteger(n)) return String(n);
+  return String(n).replace(/\.?0+$/, '');
+}
+
+/** Targeted VTO: rollup totals, by-queue hours, chronological send times (CT). */
+function targetedVtoPanel(data, errMsg) {
+  const rollup = data.rollup || {};
+  const n =
+    data.configured === false && !errMsg ? '—' : data.summary?.rows_today ?? data.rows_today ?? '—';
+  const totalHours = rollup.total_hours;
+  const byQueue = rollup.by_queue || [];
+  const timeline = rollup.timeline || [];
+  const missing = rollup.rows_missing_hours ?? 0;
+  const basis = rollup.hours_basis_note || '';
+
+  let body = '';
+  if (!errMsg && data.configured !== false) {
+    body += `<div class="rollup-total"><span class="rollup-total-label">Hours in offers today</span> <strong class="rollup-total-value">${totalHours != null ? `${formatHoursDisplay(totalHours)} h` : '—'}</strong></div>`;
+    if (basis) {
+      body += `<p class="panel-muted rollup-basis">${escapeHtml(basis)}</p>`;
+    }
+    if (missing > 0) {
+      body += `<p class="panel-muted rollup-missing">${missing} offer row(s) had no usable hour value (check Hold Hours or Start/End datetimes).</p>`;
+    }
+
+    if (byQueue.length) {
+      body += `<div class="panel-sub rollup-section-title">By sales group (queue)</div>`;
+      const qh = `<thead><tr><th>Queue</th><th class="num">Offers</th><th class="num">Hours</th></tr></thead>`;
+      const qb = byQueue
+        .map(
+          (q) =>
+            `<tr><td title="${escapeAttr(q.queue)}">${escapeHtml(q.queue)}</td><td class="num">${q.offers}</td><td class="num">${formatHoursDisplay(q.hours)} h</td></tr>`
+        )
+        .join('');
+      body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${qh}<tbody>${qb}</tbody></table></div>`;
+    }
+
+    if (timeline.length) {
+      body += `<div class="panel-sub rollup-section-title">When offers went out (Central)</div>`;
+      const th = `<thead><tr><th>Sent (CT)</th><th>Queue</th><th class="num">Hours</th><th>Name</th></tr></thead>`;
+      const tb = timeline
+        .map((t) => {
+          const hrs = t.hours != null ? `${formatHoursDisplay(t.hours)} h` : '—';
+          return `<tr><td>${escapeHtml(t.sent_ct)}</td><td title="${escapeAttr(t.queue)}">${escapeHtml(t.queue)}</td><td class="num">${escapeHtml(hrs)}</td><td title="${escapeAttr(t.name)}">${escapeHtml(t.name)}</td></tr>`;
+        })
+        .join('');
+      body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${th}<tbody>${tb}</tbody></table></div>`;
+    }
+
+    if (!byQueue.length && !timeline.length && n === 0) {
+      body += `<p class="panel-muted">No offers logged for today (CT).</p>`;
+    }
+  }
+
+  return `
+    <div class="panel-card panel-exception" id="panel-targeted-vto-bot">
+      <div class="panel-title">Targeted VTO Bot</div>
+      ${errMsg ? `<p class="panel-error">${escapeHtml(errMsg)}</p>` : ''}
+      <div class="panel-sub">Offers today: <strong>${n}</strong></div>
+      ${data.configured === false && !errMsg ? `<p class="panel-muted">${data.note || 'Not configured'}</p>` : ''}
+      ${body}
+    </div>
+  `;
+}
+
 function exceptionPanel(name, data, errMsg, previewPrefs = null) {
   const id = name.replace(/[^a-z0-9]+/gi, '-');
   const hasPreviewRows = !!(data.rows_preview && data.rows_preview.length);
@@ -430,7 +479,7 @@ async function loadAll() {
   const coRows =
     (co.call_out_main?.rows_today ?? 0) + (co.attendance_notifications?.rows_today ?? 0);
   document.getElementById('exceptions-grid').innerHTML = [
-    exceptionPanel('Targeted VTO Bot', results['targeted-vto'] || {}, errors['targeted-vto'], PREVIEW_TARGETED_VTO),
+    targetedVtoPanel(results['targeted-vto'] || {}, errors['targeted-vto']),
     exceptionPanel(
       'Automated VTO (Request Processor)',
       results['auto-vto'] || {},

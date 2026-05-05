@@ -387,6 +387,48 @@ a.digest-link {
   letter-spacing: 0;
 }
 
+.preview-table th.num,
+.preview-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Targeted VTO rollup */
+.rollup-total {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--cream-alt);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.rollup-total-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-sec);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+.rollup-total-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  color: var(--navy);
+}
+.rollup-basis {
+  margin-top: 8px;
+  line-height: 1.35;
+}
+.rollup-missing {
+  margin-top: 6px;
+}
+.rollup-section-title {
+  margin-top: 14px !important;
+}
+table.rollup-table {
+  font-size: 11px;
+}
+
 @media (max-width: 720px) {
   .main-content {
     padding: 14px 12px 40px;

@@ -185,6 +185,8 @@ Datetime serials must yield the calendar date in **America/Chicago** (not UTC mi
 
 - **`preferDateHeaders`:** `Sent At` — rows counted as “today” use **offer send time** in CT, not necessarily column **Date**.
 - Range default reads **`A1:ZZ20000`**.
+- **`rollup` (API response):** For today’s rows, the function computes **total hours**, **hours and offer counts by Queue (sales group)**, and a **timeline** of each offer with **Sent At** formatted in **Central Time** (sheet serials from `UNFORMATTED_VALUE`).
+  - **Hours source:** Prefer **`Hold Hours`** (also matches “Hours approved”, “Approved hours”, “VTO hours”, then exact **`Hours`**). If missing or blank, **`End − Start`** when both cells are numeric datetime serials (same epoch as `normalizeDateCell`).
 
 ---
 
