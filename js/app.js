@@ -1,4 +1,5 @@
 import { heatmapBandClass } from './heatmap-bands.js';
+import { canonicalVtoSalesGroup, mergeCombinedByGroupRows } from './vto-canonical-sales-group.js';
 
 const REFRESH_MS = parseInt(
   typeof window.__REFRESH_MS__ === 'number' ? window.__REFRESH_MS__ : 150000,
@@ -56,7 +57,8 @@ function formatTime(iso) {
 }
 
 async function fetchJson(url) {
-  const r = await fetch(url, { credentials: 'same-origin' });
+  // Avoid stale dashboard data: API handlers set Cache-Control max-age; default refresh would reuse it.
+  const r = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
   const text = await r.text();
   let data;
   try {
@@ -335,12 +337,15 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       body += `<p class="panel-muted rollup-missing">Requests_Submissions rows found today, but none had Decision = Approved.</p>`;
     }
 
-    const cg = combined.by_group || [];
+    const cg = mergeCombinedByGroupRows(combined.by_group || []);
     if (cg.length) {
       body += `<div class="panel-sub rollup-section-title">Combined by sales group</div>`;
       const h = `<thead><tr><th>Sales group</th><th class="num">Targeted h</th><th class="num">Automated h</th><th class="num">Total h</th></tr></thead>`;
       const b = cg
-        .map((r) => `<tr><td title="${escapeAttr(r.group)}">${escapeHtml(r.group)}</td><td class="num">${formatHoursDisplay(r.targeted_hours)}</td><td class="num">${formatHoursDisplay(r.automated_hours)}</td><td class="num">${formatHoursDisplay(r.total_hours)}</td></tr>`)
+        .map((r) => {
+          const tip = escapeAttr(`Bucket: ${r.group}`);
+          return `<tr><td title="${tip}">${escapeHtml(r.group)}</td><td class="num">${formatHoursDisplay(r.targeted_hours)}</td><td class="num">${formatHoursDisplay(r.automated_hours)}</td><td class="num">${formatHoursDisplay(r.total_hours)}</td></tr>`;
+        })
         .join('');
       body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
     }
@@ -351,11 +356,13 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       const h = `<thead><tr><th>Rep (D)</th><th>Sales group / Role (E)</th><th class="num">Hours (I)</th><th>Date Requested (F)</th></tr></thead>`;
       const b = ar
         .map((r) => {
-          const raw = r.role_raw ? String(r.role_raw) : '';
-          const title = raw && raw !== String(r.role || '') ? escapeAttr(`Sheet: ${raw}`) : '';
+          const sheetRole = String(r.role_raw || r.role || '').trim();
+          const displayRole = canonicalVtoSalesGroup(sheetRole || r.role || '');
+          const title =
+            sheetRole && displayRole !== sheetRole ? escapeAttr(`Sheet: ${sheetRole}`) : '';
           const roleCell = title
-            ? `<td title="${title}">${escapeHtml(r.role || '')}</td>`
-            : `<td>${escapeHtml(r.role || '')}</td>`;
+            ? `<td title="${title}">${escapeHtml(displayRole)}</td>`
+            : `<td>${escapeHtml(displayRole)}</td>`;
           return `<tr><td>${escapeHtml(r.rep || '')}</td>${roleCell}<td class="num">${formatHoursDisplay(r.hours)}</td><td>${escapeHtml(r.date_requested || '')}</td></tr>`;
         })
         .join('');
