@@ -2,15 +2,16 @@
 
 const { ok, errorResponse, handleOptions } = require('./_sheets.js');
 const { readSheetFilterToday } = require('./lib/filter-today.js');
+const { env } = require('./lib/deploy-defaults.js');
 
-const CACHE_SEC = parseInt(process.env.AUTO_VTO_CACHE_SECONDS || '300', 10);
+const CACHE_SEC = parseInt(env('AUTO_VTO_CACHE_SECONDS'), 10);
 
 exports.handler = async (event) => {
   const pre = handleOptions(event);
   if (pre) return pre;
 
-  const spreadsheetId = (process.env.AUTO_VTO_SPREADSHEET_ID || '').trim();
-  const tab = (process.env.AUTO_VTO_TAB || '').trim() || 'Requests_Submissions';
+  const spreadsheetId = env('AUTO_VTO_SPREADSHEET_ID');
+  const tab = env('AUTO_VTO_TAB') || 'Requests_Submissions';
 
   if (!spreadsheetId) {
     return ok({ configured: false, summary: {}, rows_today: 0, note: 'AUTO_VTO_SPREADSHEET_ID not set', fetched_at: new Date().toISOString() }, CACHE_SEC);

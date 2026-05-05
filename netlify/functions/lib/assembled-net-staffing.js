@@ -5,6 +5,7 @@
  */
 
 const { parseHourHeader } = require('./hour-headers.js');
+const { env } = require('./deploy-defaults.js');
 
 const API_BASE_DEFAULT = 'https://api.assembledhq.com/v0';
 const TZ = 'America/Chicago';
@@ -119,17 +120,17 @@ function hourFromUnix(sec) {
 /**
  * @returns {Promise<{ ok: boolean, matrix: object[], hours: number[], source: string, fetched_at: string, note?: string } | null>}
  */
-async function loadNetStaffingFromAssembled(env = process.env) {
-  const apiKey = (env.ASSEMBLED_API_KEY || '').trim();
+async function loadNetStaffingFromAssembled() {
+  const apiKey = env('ASSEMBLED_API_KEY');
   if (!apiKey) return null;
 
-  const apiBase = (env.ASSEMBLED_API_BASE || API_BASE_DEFAULT).replace(/\/$/, '');
-  const siteName = (env.ASSEMBLED_SITE_NAME || 'Consumer Sales').trim();
-  const channel = (env.ASSEMBLED_CHANNEL || 'phone').trim();
-  const intervalSec = parseInt(env.ASSEMBLED_INTERVAL_SECONDS || '1800', 10);
-  const pageSize = parseInt(env.ASSEMBLED_PAGE_SIZE || '20', 10);
-  const opStartMin = parseInt(env.ASSEMBLED_OP_START_MINUTE || String(7 * 60), 10);
-  const opEndMin = parseInt(env.ASSEMBLED_OP_END_MINUTE || String(22 * 60), 10);
+  const apiBase = (env('ASSEMBLED_API_BASE') || API_BASE_DEFAULT).replace(/\/$/, '');
+  const siteName = env('ASSEMBLED_SITE_NAME') || 'Consumer Sales';
+  const channel = env('ASSEMBLED_CHANNEL') || 'phone';
+  const intervalSec = parseInt(env('ASSEMBLED_INTERVAL_SECONDS'), 10);
+  const pageSize = parseInt(env('ASSEMBLED_PAGE_SIZE'), 10);
+  const opStartMin = parseInt(env('ASSEMBLED_OP_START_MINUTE'), 10);
+  const opEndMin = parseInt(env('ASSEMBLED_OP_END_MINUTE'), 10);
 
   const queueNames = CAP_QUEUE_MAP.map((q) => q.queue);
   const sitesRes = await assembledFetch(apiBase, apiKey, '/sites', {});

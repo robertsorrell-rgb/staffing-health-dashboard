@@ -21,6 +21,8 @@ else
 fi
 
 echo ">>> Import environment variables from .env into Netlify (merge with existing)"
+echo "    WARNING: Full .env may exceed Lambda ~4KB limit. If deploy fails, delete non-secrets"
+echo "    on Netlify and keep only GOOGLE_SERVICE_ACCOUNT_JSON (+ optional ASSEMBLED_API_KEY)."
 "${CLI[@]}" env:import .env
 
 echo ">>> Deploy draft (preview URL)"

@@ -16,14 +16,15 @@ const {
 } = require('./_sheets.js');
 const { todayCTDateStr, currentCTHour } = require('./lib/ct.js');
 const { parseHourHeader } = require('./lib/hour-headers.js');
+const { env } = require('./lib/deploy-defaults.js');
 
-const CACHE_SEC = parseInt(process.env.IDLE_HOURLY_LOG_CACHE_SECONDS || '180', 10);
+const CACHE_SEC = parseInt(env('IDLE_HOURLY_LOG_CACHE_SECONDS'), 10);
 
-const IDLE_CONSUMER_SPREADSHEET_ID = (process.env.IDLE_CONSUMER_SPREADSHEET_ID || '').trim()
-  || '1MlHy2dB9JieEk4q72YhsEJLwvFFYJZ_fAI7s4M7mDLk';
-const TAB = (process.env.IDLE_CONSUMER_HOURLY_LOG_TAB || '').trim() || 'CS_Hourly_Log';
-const RANGE = (process.env.IDLE_CONSUMER_HOURLY_LOG_RANGE || '').trim()
-  || `'${TAB.replace(/'/g, "''")}'!A1:ZZ50000`;
+const IDLE_CONSUMER_SPREADSHEET_ID = env('IDLE_CONSUMER_SPREADSHEET_ID');
+const TAB = env('IDLE_CONSUMER_HOURLY_LOG_TAB') || 'CS_Hourly_Log';
+const RANGE =
+  (process.env.IDLE_CONSUMER_HOURLY_LOG_RANGE || '').trim() ||
+  `'${TAB.replace(/'/g, "''")}'!A1:ZZ50000`;
 
 function normalizeHeader(cell) {
   return String(cell || '')

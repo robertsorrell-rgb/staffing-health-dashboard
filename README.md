@@ -39,7 +39,19 @@ npm install
 
 Copy [.env.example](.env.example) for local reference only; **Netlify** stores `GOOGLE_SERVICE_ACCOUNT_JSON` as the **full JSON string**.
 
-Configure all `*_SPREADSHEET_ID` and tab env vars in Netlify → Site settings → Environment variables.
+**Production Netlify env (important):** AWS Lambda limits **total environment size (~4 KB)** per deployment. `GOOGLE_SERVICE_ACCOUNT_JSON` is large, so **do not** import the full `.env` into Netlify if it pushes you over the limit.
+
+Instead set **only**:
+
+| Variable | Required? |
+|----------|-----------|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | **Yes** — full service account JSON (one line). |
+| `ASSEMBLED_API_KEY` | Optional — only if you use Assembled for net staffing. |
+| `ADHERENCE_DIGEST_URL` | Optional — small URL string if you use it. |
+
+Spreadsheet IDs, tabs, cache TTLs, and Assembled **non-secret** settings are **baked into** [`netlify/functions/lib/deploy-defaults.js`](netlify/functions/lib/deploy-defaults.js). Override any of them **locally** via `.env`; on Netlify add **only** overrides you truly need (each extra key costs bytes).
+
+If you already imported dozens of vars and deploy fails with **“environment variables exceed the 4KB limit”**, delete the redundant keys in Netlify (keep `GOOGLE_SERVICE_ACCOUNT_JSON` + optional secrets above), redeploy, then push this repo update.
 
 Document real sheet headers in [docs/sheet-contracts.md](docs/sheet-contracts.md) before relying on parsers.
 

@@ -16,8 +16,9 @@ const {
 const { parseHourHeader } = require('./lib/hour-headers.js');
 const { todayCTDateStr } = require('./lib/ct.js');
 const { loadNetStaffingFromAssembled } = require('./lib/assembled-net-staffing.js');
+const { env } = require('./lib/deploy-defaults.js');
 
-const CACHE_SEC = parseInt(process.env.CAPACITY_PULL_CACHE_SECONDS || '180', 10);
+const CACHE_SEC = parseInt(env('CAPACITY_PULL_CACHE_SECONDS'), 10);
 
 function tabRange(tab, a1) {
   const t = (tab || 'Sheet1').replace(/'/g, "''");
@@ -134,10 +135,10 @@ exports.handler = async (event) => {
   const pre = handleOptions(event);
   if (pre) return pre;
 
-  const sourceMode = (process.env.CAPACITY_PULL_SOURCE || '').trim().toLowerCase();
-  const apiKey = (process.env.ASSEMBLED_API_KEY || '').trim();
-  const spreadsheetId = (process.env.CAPACITY_PULL_SPREADSHEET_ID || '').trim();
-  const tab = (process.env.CAPACITY_PULL_TAB || '').trim() || 'Capacity Pull';
+  const sourceMode = env('CAPACITY_PULL_SOURCE').toLowerCase();
+  const apiKey = env('ASSEMBLED_API_KEY');
+  const spreadsheetId = env('CAPACITY_PULL_SPREADSHEET_ID');
+  const tab = env('CAPACITY_PULL_TAB') || 'Capacity Pull';
 
   /** auto: assembled if key present, else sheet; assembled|sheet forces primary */
   const mode = sourceMode || (apiKey ? 'auto' : 'sheet');

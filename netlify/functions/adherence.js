@@ -2,16 +2,18 @@
 
 const { getSheetValues, normalizeDateCell, ok, bad, errorResponse, handleOptions } = require('./_sheets.js');
 const { todayCTDateStr } = require('./lib/ct.js');
+const { env } = require('./lib/deploy-defaults.js');
 
-const CACHE_SEC = parseInt(process.env.ADHERENCE_CACHE_SECONDS || '120', 10);
+const CACHE_SEC = parseInt(env('ADHERENCE_CACHE_SECONDS'), 10);
 
 exports.handler = async (event) => {
   const pre = handleOptions(event);
   if (pre) return pre;
 
-  const spreadsheetId = (process.env.ADHERENCE_SPREADSHEET_ID || '').trim();
-  const alertsTab = (process.env.ADHERENCE_ALERTS_TAB || '').trim() || 'Adherence_Alert_Log';
-  const alertsRange = (process.env.ADHERENCE_ALERTS_RANGE || '').trim() || `'${alertsTab.replace(/'/g, "''")}'!A1:Z50000`;
+  const spreadsheetId = env('ADHERENCE_SPREADSHEET_ID');
+  const alertsTab = env('ADHERENCE_ALERTS_TAB') || 'Adherence_Alert_Log';
+  const alertsRange =
+    (process.env.ADHERENCE_ALERTS_RANGE || '').trim() || `'${alertsTab.replace(/'/g, "''")}'!A1:Z50000`;
   const digestUrl = (process.env.ADHERENCE_DIGEST_URL || '').trim();
 
   if (!spreadsheetId) {
