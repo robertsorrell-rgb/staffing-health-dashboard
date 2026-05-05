@@ -20,7 +20,7 @@ exports.handler = async (event) => {
 
   try {
     const { headers, rowsToday, today } = await readSheetFilterToday(spreadsheetId, tab, 'A1:ZZ20000', {
-      preferDateHeaders: ['Sent At', 'sent at'],
+      preferDateHeaders: ['Date', 'date'],
     });
 
     const rollup =
@@ -30,9 +30,11 @@ exports.handler = async (event) => {
       {
         configured: true,
         today,
+        tab,
         summary: {
           rows_today: rowsToday.length,
-          hours_in_offers_total: rollup.total_hours,
+          committed_offers_today: rollup.committed_offers_today,
+          hours_approved_today: rollup.total_hours,
         },
         rollup,
         fetched_at: new Date().toISOString(),
@@ -47,10 +49,12 @@ exports.handler = async (event) => {
 function emptyRollup() {
   return {
     total_hours: 0,
+    committed_offers_today: 0,
+    offers_other_status_today: 0,
     by_queue: [],
     timeline: [],
     rows_missing_hours: 0,
     hours_basis_note:
-      'No rows for today yet — totals and timelines populate when Offers exist with Sent At on today (CT).',
+      'No rows for today yet — totals use column Date (CT calendar day), Status COMMITTED, and Start/End times.',
   };
 }

@@ -183,10 +183,15 @@ Datetime serials must yield the calendar date in **America/Chicago** (not UTC mi
 
 ### Parser (`targeted-vto.js` / `filter-today.js`)
 
-- **`preferDateHeaders`:** `Sent At` — rows counted as “today” use **offer send time** in CT, not necessarily column **Date**.
+- **`preferDateHeaders`:** **`Date`** (column **C**) — “today” = **calendar date in Central Time**, same as other dashboard panels.
+- **Tab:** **`Offers`** (`TARGETED_VTO_TAB`).
 - Range default reads **`A1:ZZ20000`**.
-- **`rollup` (API response):** For today’s rows, the function computes **total hours**, **hours and offer counts by Queue (sales group)**, and a **timeline** of each offer with **Sent At** formatted in **Central Time** (sheet serials from `UNFORMATTED_VALUE`).
-  - **Hours source:** Prefer **`Hold Hours`** (also matches “Hours approved”, “Approved hours”, “VTO hours”, then exact **`Hours`**). If missing or blank, **`End − Start`** when both cells are numeric datetime serials (same epoch as `normalizeDateCell`).
+- **`rollup` (API response):**
+  - **Approved offers** = rows where **`Status`** (column **N**) is **`COMMITTED`** (case-insensitive).
+  - **`total_hours` / approved KPI:** summed **only for COMMITTED** rows.
+  - **Hours math:** **`End − Start`** using **`HH:MM`** text in columns **D/E** when present; otherwise full **datetime serial** subtraction; otherwise **`Hold Hours`** (column **M**).
+  - **By queue:** **`Queue`** column **I** (sales group).
+  - **Timeline:** **`Sent At`** (column **K**) formatted in **Central Time** when numeric serial.
 
 ---
 

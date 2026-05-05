@@ -282,30 +282,45 @@ function formatHoursDisplay(h) {
   return String(n).replace(/\.?0+$/, '');
 }
 
-/** Targeted VTO: rollup totals, by-queue hours, chronological send times (CT). */
+/** Targeted VTO: approved (COMMITTED) hours, by queue, timeline — sheet Offers tab, Date col + Status. */
 function targetedVtoPanel(data, errMsg) {
-  const rollup = data.rollup || {};
-  const n =
+  const rollup = data.rollup;
+  const rowsToday =
     data.configured === false && !errMsg ? '—' : data.summary?.rows_today ?? data.rows_today ?? '—';
-  const totalHours = rollup.total_hours;
-  const byQueue = rollup.by_queue || [];
-  const timeline = rollup.timeline || [];
-  const missing = rollup.rows_missing_hours ?? 0;
-  const basis = rollup.hours_basis_note || '';
+  const committed =
+    rollup && data.summary?.committed_offers_today != null
+      ? data.summary.committed_offers_today
+      : rollup?.committed_offers_today ?? '—';
+  const otherStatus = rollup?.offers_other_status_today ?? 0;
+  const approvedHours =
+    rollup && rollup.total_hours != null && rollup.total_hours !== undefined
+      ? Number(rollup.total_hours)
+      : null;
+  const byQueue = rollup?.by_queue || [];
+  const timeline = rollup?.timeline || [];
+  const missing = rollup?.rows_missing_hours ?? 0;
+  const basis = rollup?.hours_basis_note || '';
 
   let body = '';
   if (!errMsg && data.configured !== false) {
-    body += `<div class="rollup-total"><span class="rollup-total-label">Hours in offers today</span> <strong class="rollup-total-value">${totalHours != null ? `${formatHoursDisplay(totalHours)} h` : '—'}</strong></div>`;
+    const hoursLabel =
+      approvedHours != null && !Number.isNaN(approvedHours)
+        ? `${formatHoursDisplay(approvedHours)} h`
+        : '—';
+    body += `<div class="rollup-total"><span class="rollup-total-label">Approved hours today (Committed)</span> <strong class="rollup-total-value">${hoursLabel}</strong></div>`;
     if (basis) {
       body += `<p class="panel-muted rollup-basis">${escapeHtml(basis)}</p>`;
     }
+    if (typeof otherStatus === 'number' && otherStatus > 0) {
+      body += `<p class="panel-muted rollup-missing">${otherStatus} other row(s) today (not COMMITTED) — excluded from approved totals.</p>`;
+    }
     if (missing > 0) {
-      body += `<p class="panel-muted rollup-missing">${missing} offer row(s) had no usable hour value (check Hold Hours or Start/End datetimes).</p>`;
+      body += `<p class="panel-muted rollup-missing">${missing} COMMITTED row(s) missing usable Start/End or Hold Hours.</p>`;
     }
 
     if (byQueue.length) {
-      body += `<div class="panel-sub rollup-section-title">By sales group (queue)</div>`;
-      const qh = `<thead><tr><th>Queue</th><th class="num">Offers</th><th class="num">Hours</th></tr></thead>`;
+      body += `<div class="panel-sub rollup-section-title">Approved hours by sales group (Queue)</div>`;
+      const qh = `<thead><tr><th>Queue</th><th class="num">Approved offers</th><th class="num">Hours</th></tr></thead>`;
       const qb = byQueue
         .map(
           (q) =>
@@ -316,7 +331,7 @@ function targetedVtoPanel(data, errMsg) {
     }
 
     if (timeline.length) {
-      body += `<div class="panel-sub rollup-section-title">When offers went out (Central)</div>`;
+      body += `<div class="panel-sub rollup-section-title">Committed offers — sent (Central)</div>`;
       const th = `<thead><tr><th>Sent (CT)</th><th>Queue</th><th class="num">Hours</th><th>Name</th></tr></thead>`;
       const tb = timeline
         .map((t) => {
@@ -327,8 +342,14 @@ function targetedVtoPanel(data, errMsg) {
       body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${th}<tbody>${tb}</tbody></table></div>`;
     }
 
-    if (!byQueue.length && !timeline.length && n === 0) {
-      body += `<p class="panel-muted">No offers logged for today (CT).</p>`;
+    if (!byQueue.length && !timeline.length && rollup) {
+      const rtNum = Number(rowsToday);
+      const cNum = Number(committed);
+      if (Number.isFinite(rtNum) && rtNum === 0) {
+        body += `<p class="panel-muted">No offer rows for today (Date column, CT).</p>`;
+      } else if (Number.isFinite(rtNum) && rtNum > 0 && Number.isFinite(cNum) && cNum === 0) {
+        body += `<p class="panel-muted">Offers exist for today but none are COMMITTED — approved totals count only COMMITTED rows.</p>`;
+      }
     }
   }
 
@@ -336,7 +357,8 @@ function targetedVtoPanel(data, errMsg) {
     <div class="panel-card panel-exception" id="panel-targeted-vto-bot">
       <div class="panel-title">Targeted VTO Bot</div>
       ${errMsg ? `<p class="panel-error">${escapeHtml(errMsg)}</p>` : ''}
-      <div class="panel-sub">Offers today: <strong>${n}</strong></div>
+      <div class="panel-sub">Offers with Date = today (CT): <strong>${rowsToday}</strong> · Approved (Status COMMITTED): <strong>${committed}</strong></div>
+      ${data.tab ? `<p class="panel-muted" style="margin-top:4px;font-size:11px;">Sheet tab: ${escapeHtml(data.tab)}</p>` : ''}
       ${data.configured === false && !errMsg ? `<p class="panel-muted">${data.note || 'Not configured'}</p>` : ''}
       ${body}
     </div>
