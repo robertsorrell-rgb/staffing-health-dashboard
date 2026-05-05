@@ -276,52 +276,69 @@ function tablePreviewPick(headers, rows, prefs) {
 }
 
 function formatHoursDisplay(h) {
-  if (h == null || Number.isNaN(Number(h))) return '—';
-  const n = Math.round(Number(h) * 100) / 100;
+  if (h === null || h === undefined || h === '') return '—';
+  const num = Number(h);
+  if (Number.isNaN(num)) return '—';
+  const n = Math.round(num * 100) / 100;
   if (Number.isInteger(n)) return String(n);
   return String(n).replace(/\.?0+$/, '');
 }
 
-/** Targeted VTO: approved (COMMITTED) hours, by queue, timeline — sheet Offers tab, Date col + Status. */
+/** Combined VTO headline comes from sheet tab VTO_Summary (formulas); Offers tab still powers drill-down tables. */
 function targetedVtoPanel(data, errMsg) {
-  const rollup = data.rollup;
-  const rowsToday =
-    data.configured === false && !errMsg ? '—' : data.summary?.rows_today ?? data.rows_today ?? '—';
-  const committed =
-    rollup && data.summary?.committed_offers_today != null
-      ? data.summary.committed_offers_today
-      : rollup?.committed_offers_today ?? '—';
-  const otherStatus = rollup?.offers_other_status_today ?? 0;
-  const approvedHours =
-    rollup && rollup.total_hours != null && rollup.total_hours !== undefined
-      ? Number(rollup.total_hours)
-      : null;
-  const byQueue = rollup?.by_queue || [];
-  const timeline = rollup?.timeline || [];
-  const missing = rollup?.rows_missing_hours ?? 0;
-  const basis = rollup?.hours_basis_note || '';
+  const rollup = data.rollup || {};
+  const sum = data.summary || {};
+  const ss = data.sheet_summary || {};
+
+  const rowsTargeted =
+    data.configured === false && !errMsg ? '—' : sum.rows_targeted_offers_today ?? '—';
+  const committedTargeted =
+    sum.committed_targeted_today ?? rollup.committed_offers_today ?? '—';
+  const fromOffers = sum.hours_targeted_from_offers ?? rollup.total_hours ?? null;
+
+  const combined = ss.combined_approved_hours;
+  const shTargeted = ss.targeted_committed_hours;
+  const shAuto = ss.automated_approved_hours;
+
+  const otherStatus = rollup.offers_other_status_today ?? 0;
+  const targetedMissing = rollup.rows_missing_hours ?? 0;
 
   let body = '';
   if (!errMsg && data.configured !== false) {
-    const hoursLabel =
-      approvedHours != null && !Number.isNaN(approvedHours)
-        ? `${formatHoursDisplay(approvedHours)} h`
-        : '—';
-    body += `<div class="rollup-total"><span class="rollup-total-label">Approved hours today (Committed)</span> <strong class="rollup-total-value">${hoursLabel}</strong></div>`;
-    if (basis) {
-      body += `<p class="panel-muted rollup-basis">${escapeHtml(basis)}</p>`;
+    if (data.targeted_fetch_error) {
+      body += `<p class="panel-error">Offers tab: ${escapeHtml(data.targeted_fetch_error)}</p>`;
     }
-    if (typeof otherStatus === 'number' && otherStatus > 0) {
-      body += `<p class="panel-muted rollup-missing">${otherStatus} other row(s) today (not COMMITTED) — excluded from approved totals.</p>`;
-    }
-    if (missing > 0) {
-      body += `<p class="panel-muted rollup-missing">${missing} COMMITTED row(s) missing usable Start/End or Hold Hours.</p>`;
+    if (data.sheet_summary_error) {
+      body += `<p class="panel-error">Summary tab: ${escapeHtml(data.sheet_summary_error)}</p>`;
     }
 
-    if (byQueue.length) {
-      body += `<div class="panel-sub rollup-section-title">Approved hours by sales group (Queue)</div>`;
-      const qh = `<thead><tr><th>Queue</th><th class="num">Approved offers</th><th class="num">Hours</th></tr></thead>`;
-      const qb = byQueue
+    const hero =
+      combined != null && !Number.isNaN(Number(combined))
+        ? `${formatHoursDisplay(combined)} h`
+        : '—';
+    body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours</span> <strong class="rollup-total-value">${hero}</strong></div>`;
+    body += `<p class="panel-muted rollup-breakdown">From <strong>${escapeHtml(ss.tab || 'VTO_Summary')}</strong> — Targeted: <strong>${formatHoursDisplay(shTargeted)} h</strong> · Automated: <strong>${formatHoursDisplay(shAuto)} h</strong></p>`;
+    body += `<p class="panel-muted rollup-basis">Cross-check (parsed from Offers, COMMITTED only): <strong>${formatHoursDisplay(fromOffers)} h</strong></p>`;
+
+    if (combined == null && !data.sheet_summary_error) {
+      body += `<p class="panel-muted rollup-missing">On the summary tab, add column A label <strong>Combined approved hours</strong> and the total in column B (use formulas / IMPORTRANGE). See <code>docs/sheet-contracts.md</code>.</p>`;
+    }
+
+    if (rollup.hours_basis_note) {
+      body += `<p class="panel-muted rollup-basis">${escapeHtml(rollup.hours_basis_note)}</p>`;
+    }
+    if (typeof otherStatus === 'number' && otherStatus > 0) {
+      body += `<p class="panel-muted rollup-missing">${otherStatus} offer row(s) today are not COMMITTED.</p>`;
+    }
+    if (targetedMissing > 0) {
+      body += `<p class="panel-muted rollup-missing">${targetedMissing} COMMITTED row(s) missing hour value.</p>`;
+    }
+
+    const tq = rollup.by_queue || [];
+    if (tq.length) {
+      body += `<div class="panel-sub rollup-section-title">Offers — approved by queue (COMMITTED)</div>`;
+      const qh = `<thead><tr><th>Queue</th><th class="num">Offers</th><th class="num">Hours</th></tr></thead>`;
+      const qb = tq
         .map(
           (q) =>
             `<tr><td title="${escapeAttr(q.queue)}">${escapeHtml(q.queue)}</td><td class="num">${q.offers}</td><td class="num">${formatHoursDisplay(q.hours)} h</td></tr>`
@@ -330,10 +347,11 @@ function targetedVtoPanel(data, errMsg) {
       body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${qh}<tbody>${qb}</tbody></table></div>`;
     }
 
-    if (timeline.length) {
-      body += `<div class="panel-sub rollup-section-title">Committed offers — sent (Central)</div>`;
+    const ttl = rollup.timeline || [];
+    if (ttl.length) {
+      body += `<div class="panel-sub rollup-section-title">Offers — sent (Central)</div>`;
       const th = `<thead><tr><th>Sent (CT)</th><th>Queue</th><th class="num">Hours</th><th>Name</th></tr></thead>`;
-      const tb = timeline
+      const tb = ttl
         .map((t) => {
           const hrs = t.hours != null ? `${formatHoursDisplay(t.hours)} h` : '—';
           return `<tr><td>${escapeHtml(t.sent_ct)}</td><td title="${escapeAttr(t.queue)}">${escapeHtml(t.queue)}</td><td class="num">${escapeHtml(hrs)}</td><td title="${escapeAttr(t.name)}">${escapeHtml(t.name)}</td></tr>`;
@@ -342,23 +360,27 @@ function targetedVtoPanel(data, errMsg) {
       body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${th}<tbody>${tb}</tbody></table></div>`;
     }
 
-    if (!byQueue.length && !timeline.length && rollup) {
-      const rtNum = Number(rowsToday);
-      const cNum = Number(committed);
+    const rtNum = Number(rowsTargeted);
+    const cNum = Number(committedTargeted);
+    if (!tq.length && !ttl.length && rollup) {
       if (Number.isFinite(rtNum) && rtNum === 0) {
-        body += `<p class="panel-muted">No offer rows for today (Date column, CT).</p>`;
+        body += `<p class="panel-muted">No Offers rows for today (Date column, CT).</p>`;
       } else if (Number.isFinite(rtNum) && rtNum > 0 && Number.isFinite(cNum) && cNum === 0) {
-        body += `<p class="panel-muted">Offers exist for today but none are COMMITTED — approved totals count only COMMITTED rows.</p>`;
+        body += `<p class="panel-muted">Offers exist for today but none are COMMITTED yet.</p>`;
       }
     }
   }
 
+  const metaBits = [];
+  if (data.offers_tab) metaBits.push(`Offers: ${escapeHtml(data.offers_tab)}`);
+  if (ss.tab) metaBits.push(`Summary: ${escapeHtml(ss.tab)}`);
+
   return `
     <div class="panel-card panel-exception" id="panel-targeted-vto-bot">
-      <div class="panel-title">Targeted VTO Bot</div>
+      <div class="panel-title">VTO approvals</div>
       ${errMsg ? `<p class="panel-error">${escapeHtml(errMsg)}</p>` : ''}
-      <div class="panel-sub">Offers with Date = today (CT): <strong>${rowsToday}</strong> · Approved (Status COMMITTED): <strong>${committed}</strong></div>
-      ${data.tab ? `<p class="panel-muted" style="margin-top:4px;font-size:11px;">Sheet tab: ${escapeHtml(data.tab)}</p>` : ''}
+      <div class="panel-sub">Offers with Date = today (CT): <strong>${rowsTargeted}</strong> · COMMITTED: <strong>${committedTargeted}</strong></div>
+      ${metaBits.length ? `<p class="panel-muted" style="margin-top:4px;font-size:11px;">${metaBits.join(' · ')}</p>` : ''}
       ${data.configured === false && !errMsg ? `<p class="panel-muted">${data.note || 'Not configured'}</p>` : ''}
       ${body}
     </div>
