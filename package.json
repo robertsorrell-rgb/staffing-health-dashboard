@@ -1,0 +1,19 @@
+{
+  "name": "staffing-health-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Staffing Health Dashboard — Consumer Sales WFM",
+  "dependencies": {
+    "googleapis": "^144.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "npx --yes serve . -l 8888",
+    "bootstrap-env": "node scripts/bootstrap-local-env.js",
+    "dev": "npx --yes netlify dev",
+    "dev:functions": "npx --yes netlify functions:serve -f netlify/functions -p 8889",
+    "dev:proxy": "node scripts/dev-dashboard-proxy.js"
+  }
+}

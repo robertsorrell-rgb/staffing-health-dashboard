@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Staffing Health Dashboard</title>
+  <link rel="stylesheet" href="css/styles.css?v=2" />
+</head>
+<body>
+  <header class="app-header" role="banner">
+    <div class="header-brand">
+      <div class="brand-mark" aria-hidden="true">VT</div>
+      <span class="header-title">Staffing Health</span>
+    </div>
+    <div class="header-divider" aria-hidden="true"></div>
+    <span class="header-subtitle">Consumer Sales · Workforce staffing health</span>
+    <span class="header-clock" id="header-clock" aria-live="polite"></span>
+  </header>
+
+  <div class="toolbar" role="toolbar">
+    <span class="toolbar-label">Auto-refresh ~2–3 min · Central Time</span>
+    <button type="button" class="btn" id="btn-refresh" aria-label="Refresh now">Refresh</button>
+  </div>
+
+  <main class="main-content" role="main">
+    <div class="freshness-strip" id="freshness-strip" aria-live="polite">
+      <span class="panel-muted">Loading data sources…</span>
+    </div>
+
+    <!-- Section 1 -->
+    <section class="section-block" aria-labelledby="sec1-title">
+      <div class="section-header">
+        <h2 class="section-title" id="sec1-title">Are we staffed correctly right now?</h2>
+        <span class="section-meta">Net staffing · Idle · Adherence</span>
+      </div>
+
+      <div class="heatmap-card">
+        <div class="panel-title" style="padding:12px 16px 0;">Net staffing vs target (% deviation)</div>
+        <p class="panel-muted" style="padding:4px 16px 8px;font-size:11px;">
+          Bands (tunable in <code style="font-family:var(--font-mono);">js/heatmap-bands.js</code>): green −10%…+10%; yellow under −20%…−10%; red under &lt;−20%; yellow over +10%…+25%; red over &gt;+25%.
+        </p>
+        <p class="heatmap-meta" id="net-staffing-meta" aria-live="polite"></p>
+        <div id="net-staffing-mount"></div>
+      </div>
+
+      <div class="panel-grid">
+        <div class="panel-card" id="panel-idle">
+          <div class="panel-title">Idle time (CS_Hourly_Log)</div>
+          <div class="panel-muted">Weighted floor ΣAvail ÷ Σ(Avail + On Call)</div>
+          <div class="panel-kpi" id="idle-kpi">—</div>
+          <div class="panel-sub" id="idle-sub"></div>
+          <div id="idle-spark" class="sparkline-wrap"></div>
+          <div id="idle-groups"></div>
+          <div class="panel-error" id="idle-err" hidden></div>
+        </div>
+        <div class="panel-card" id="panel-adherence">
+          <div class="panel-title">Live floor adherence</div>
+          <div class="panel-sub" id="adh-stats"></div>
+          <div class="panel-sub" id="adh-managers"></div>
+          <p style="margin-top:10px;"><a class="digest-link" id="adh-digest" href="#" target="_blank" rel="noopener" hidden>Daily digest →</a></p>
+          <div class="panel-error" id="adh-err" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 2 -->
+    <section class="section-block" aria-labelledby="sec2-title">
+      <div class="section-header">
+        <h2 class="section-title" id="sec2-title">Are exceptions handled cleanly?</h2>
+        <span class="section-meta">VTO · PTO · Call-out</span>
+      </div>
+      <div class="panel-grid" id="exceptions-grid"></div>
+    </section>
+  </main>
+
+  <script type="module" src="js/app.js?v=2"></script>
+</body>
+</html>

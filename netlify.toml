@@ -1,0 +1,44 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/net-staffing"
+  to = "/.netlify/functions/net-staffing"
+  status = 200
+
+[[redirects]]
+  from = "/api/idle-hourly-log"
+  to = "/.netlify/functions/idle-hourly-log"
+  status = 200
+
+[[redirects]]
+  from = "/api/adherence"
+  to = "/.netlify/functions/adherence"
+  status = 200
+
+[[redirects]]
+  from = "/api/targeted-vto"
+  to = "/.netlify/functions/targeted-vto"
+  status = 200
+
+[[redirects]]
+  from = "/api/auto-vto"
+  to = "/.netlify/functions/auto-vto"
+  status = 200
+
+[[redirects]]
+  from = "/api/bobbot"
+  to = "/.netlify/functions/bobbot"
+  status = 200
+
+[[redirects]]
+  from = "/api/callout"
+  to = "/.netlify/functions/callout"
+  status = 200
+
+[context.production.environment]
+  NODE_VERSION = "20"
