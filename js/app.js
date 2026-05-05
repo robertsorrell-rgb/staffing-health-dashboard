@@ -22,23 +22,10 @@ const PREVIEW_AUTO_VTO = {
   skip: [],
   maxCols: 6,
 };
+/** PTO table: Name · Sales group · Status · Manager only (see pickBobbotPtoIndices). */
 const PREVIEW_BOBBOT = {
-  preferred: [
-    'employee_email',
-    'email',
-    'payroll',
-    'name',
-    'manager',
-    'queue',
-    'decision',
-    'saved',
-    'request date',
-    'hours',
-    'type',
-    'pto',
-  ],
+  pick: 'bobbot-pto',
   skip: [/request.?key/i, /^pid[:|]/i, /employee.?key/i],
-  maxCols: 6,
 };
 const PREVIEW_CALLOUT = {
   preferred: ['timestamp', 'agent', 'name', 'manager', 'queue', 'reason', 'status', 'date'],
@@ -200,9 +187,11 @@ function escapeAttr(s) {
     .trim();
 }
 
-function previewTableHtml(headers, colIndices, rows) {
+function previewTableHtml(headers, colIndices, rows, headLabels = null) {
   if (!headers?.length || !colIndices?.length) return '<p class="panel-muted">No preview columns</p>';
-  const th = colIndices.map((i) => `<th>${escapeHtml(String(headers[i] ?? ''))}</th>`).join('');
+  const th = colIndices
+    .map((i, j) => `<th>${escapeHtml(String(headLabels?.[j] ?? headers[i] ?? ''))}</th>`)
+    .join('');
   const body = rows
     .slice(0, 12)
     .map((r) => {
@@ -223,6 +212,76 @@ function tablePreview(headers, rows, maxCols = 6) {
   const n = Math.min(maxCols, headers.length);
   const idx = Array.from({ length: n }, (_, i) => i);
   return previewTableHtml(headers, idx, rows);
+}
+
+/**
+ * Bobbot / PTO preview: four columns with stable labels.
+ * @returns {{ indices: number[], labels: string[] }}
+ */
+function pickBobbotPtoIndices(headers) {
+  const lower = headers.map((h) => String(h || '').trim().toLowerCase());
+  const used = new Set();
+  const skip = (h) =>
+    /request.?key/i.test(h) ||
+    /^pid[:|]/i.test(h) ||
+    /employee.?key/i.test(h);
+
+  const takeFirst = (pred) => {
+    for (let i = 0; i < lower.length; i++) {
+      if (used.has(i)) continue;
+      const h = lower[i];
+      if (skip(h)) continue;
+      if (pred(h)) {
+        used.add(i);
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  let nameI = takeFirst(
+    (h) =>
+      h === 'payroll_name' ||
+      h.includes('payroll_name') ||
+      h === 'employee_name' ||
+      (h.includes('employee') && h.includes('name') && !h.includes('email')) ||
+      h === 'name' ||
+      h === 'rep name'
+  );
+  if (nameI < 0) nameI = takeFirst((h) => h === 'employee_email');
+  if (nameI < 0) nameI = takeFirst((h) => h.includes('payroll'));
+
+  const queueI = takeFirst(
+    (h) => h === 'queue' || h.includes('sales group') || h.includes('sales_group')
+  );
+
+  const statusI = takeFirst(
+    (h) =>
+      h === 'status' ||
+      h.includes('status') ||
+      h === 'decision' ||
+      h.includes('decision') ||
+      h === 'stage' ||
+      h.includes('stage') ||
+      h.includes('approval')
+  );
+
+  const mgrI = takeFirst((h) => h.includes('manager') || h.includes('supervisor'));
+
+  const indices = [];
+  const labels = [];
+  const push = (i, label) => {
+    if (i >= 0 && !indices.includes(i)) {
+      indices.push(i);
+      labels.push(label);
+    }
+  };
+  push(nameI, 'Name');
+  push(queueI, 'Sales group');
+  push(statusI, 'Status');
+  push(mgrI, 'Manager');
+
+  return { indices, labels };
 }
 
 function pickPreviewIndices(headers, prefs) {
@@ -273,6 +332,11 @@ function pickPreviewIndices(headers, prefs) {
 
 function tablePreviewPick(headers, rows, prefs) {
   if (!headers?.length) return '<p class="panel-muted">No headers</p>';
+  if (prefs?.pick === 'bobbot-pto') {
+    const { indices, labels } = pickBobbotPtoIndices(headers);
+    if (!indices.length) return '<p class="panel-muted">No preview columns</p>';
+    return previewTableHtml(headers, indices, rows, labels);
+  }
   const idx = pickPreviewIndices(headers, prefs || {});
   return previewTableHtml(headers, idx, rows);
 }
