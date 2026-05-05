@@ -4,6 +4,7 @@ const { ok, handleOptions } = require('./_sheets.js');
 const { readSheetFilterToday } = require('./lib/filter-today.js');
 const { rollupTargetedOffers } = require('./lib/targeted-vto-rollup.js');
 const { rollupAutoVtoApproved } = require('./lib/auto-vto-approved-rollup.js');
+const { applyCanonicalToAutomatedRollup, canonicalVtoSalesGroup } = require('./lib/vto-canonical-sales-group.js');
 const { todayCTDateStr } = require('./lib/ct.js');
 const { env } = require('./lib/deploy-defaults.js');
 
@@ -72,7 +73,9 @@ exports.handler = async (event) => {
       autoDateColumnUsed = active.headers?.[active.dateCol] || null;
       auto =
         active.headers && active.headers.length
-          ? rollupAutoVtoApproved(active.rowsToday || [], active.headers)
+          ? applyCanonicalToAutomatedRollup(
+              rollupAutoVtoApproved(active.rowsToday || [], active.headers)
+            )
           : emptyAutoRollup();
     } catch (err) {
       autoFetchError = err.message || String(err);
@@ -139,22 +142,24 @@ function emptyAutoRollup() {
 }
 
 function mergeByGroup(targetedByQueue, autoByRole) {
-  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const map = new Map();
   for (const t of targetedByQueue || []) {
-    const k = norm(t.queue);
-    map.set(k, {
-      group: t.queue,
-      targeted_hours: Number(t.hours) || 0,
-      automated_hours: 0,
-      total_hours: Number(t.hours) || 0,
-    });
+    const group = canonicalVtoSalesGroup(t.queue);
+    const k = group.toLowerCase();
+    const hours = Number(t.hours) || 0;
+    if (!map.has(k)) {
+      map.set(k, { group, targeted_hours: 0, automated_hours: 0, total_hours: 0 });
+    }
+    const cur = map.get(k);
+    cur.targeted_hours += hours;
+    cur.total_hours += hours;
   }
   for (const a of autoByRole || []) {
-    const k = norm(a.role);
+    const group = canonicalVtoSalesGroup(a.role);
+    const k = group.toLowerCase();
     const hours = Number(a.hours) || 0;
     if (!map.has(k)) {
-      map.set(k, { group: a.role, targeted_hours: 0, automated_hours: hours, total_hours: hours });
+      map.set(k, { group, targeted_hours: 0, automated_hours: hours, total_hours: hours });
     } else {
       const cur = map.get(k);
       cur.automated_hours += hours;

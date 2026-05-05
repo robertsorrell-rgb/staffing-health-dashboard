@@ -350,7 +350,14 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       body += `<div class="panel-sub rollup-section-title">Automated approvals detail (Requests_Submissions)</div>`;
       const h = `<thead><tr><th>Rep (D)</th><th>Sales group / Role (E)</th><th class="num">Hours (I)</th><th>Date Requested (F)</th></tr></thead>`;
       const b = ar
-        .map((r) => `<tr><td>${escapeHtml(r.rep || '')}</td><td>${escapeHtml(r.role || '')}</td><td class="num">${formatHoursDisplay(r.hours)}</td><td>${escapeHtml(r.date_requested || '')}</td></tr>`)
+        .map((r) => {
+          const raw = r.role_raw ? String(r.role_raw) : '';
+          const title = raw && raw !== String(r.role || '') ? escapeAttr(`Sheet: ${raw}`) : '';
+          const roleCell = title
+            ? `<td title="${title}">${escapeHtml(r.role || '')}</td>`
+            : `<td>${escapeHtml(r.role || '')}</td>`;
+          return `<tr><td>${escapeHtml(r.rep || '')}</td>${roleCell}<td class="num">${formatHoursDisplay(r.hours)}</td><td>${escapeHtml(r.date_requested || '')}</td></tr>`;
+        })
         .join('');
       body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
     }
