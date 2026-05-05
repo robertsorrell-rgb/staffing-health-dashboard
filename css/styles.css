@@ -163,14 +163,36 @@ body {
   align-items: start;
 }
 
-/** Full-width stacked cards — stops wide sheet tables from blowing out the grid and overlapping siblings. */
+/**
+ * Exceptions: VTO uses ~half the row (column 1); Bobbot + call-out stack in column 2.
+ * Tables use minmax(0,…) so wide grids scroll inside the card instead of blowing out layout.
+ */
 .exceptions-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 20px;
+  align-items: start;
 }
 
 .exceptions-grid > .panel-card {
   min-width: 0;
+}
+
+.exceptions-grid > .panel-card:first-child {
+  grid-column: 1;
+}
+
+.exceptions-grid > .panel-card:not(:first-child) {
+  grid-column: 2;
+}
+
+@media (max-width: 900px) {
+  .exceptions-grid {
+    grid-template-columns: 1fr;
+  }
+  .exceptions-grid > .panel-card:first-child,
+  .exceptions-grid > .panel-card:not(:first-child) {
+    grid-column: auto;
+  }
 }
 
 .panel-card {
@@ -400,16 +422,6 @@ a.digest-link {
   background: var(--cream-alt);
   border-radius: var(--radius);
   border: 1px solid var(--border);
-}
-/* VTO approvals card: KPI strip does not need full panel width */
-#panel-targeted-vto-bot .rollup-total {
-  max-width: 50%;
-  box-sizing: border-box;
-}
-@media (max-width: 720px) {
-  #panel-targeted-vto-bot .rollup-total {
-    max-width: 100%;
-  }
 }
 .rollup-total-label {
   display: block;
