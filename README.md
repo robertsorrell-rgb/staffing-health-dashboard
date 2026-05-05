@@ -57,13 +57,55 @@ This writes `GOOGLE_SERVICE_ACCOUNT_JSON`, IDLE CONSUMER defaults, and **merges 
 
 ### Git repository
 
-If automated `git init` fails (hooks permission / sandbox), run locally:
+`.gitignore` excludes **`.env`** (never commit secrets). Verify before pushing:
 
 ```bash
-bash scripts/git-init-and-commit.sh
+test -z "$(git ls-files -- .env)" && echo "OK: .env not tracked"
 ```
 
-Or manually: `git init -b main`, `git add -A`, confirm `.env` is **not** tracked, then `git commit`.
+If **`git init` fails** with `.git/hooks: Operation not permitted` (Cursor / some sandboxes), use a Git metadata directory outside the project:
+
+```bash
+bash scripts/init-git-separate-dir.sh
+git add -A && git status   # confirm .env absent
+git commit -m "Your message"
+```
+
+### Deploy & ops checklist (Netlify + GitHub)
+
+These steps require **your** browser login / GitHub access (not automatable from here):
+
+1. **GitHub remote & push**
+
+   ```bash
+   bash scripts/add-remote-push.sh git@github.com:YOUR_ORG/staffing-health-dashboard.git
+   ```
+
+   _(HTTPS URLs work too.)_
+
+2. **Netlify site + env**
+
+   Ensure [.env](.env) exists locally (`bootstrap-local-env.js`). Then:
+
+   ```bash
+   bash scripts/netlify-setup.sh
+   ```
+
+   That runs `netlify login`, `netlify link`, **`netlify env:import .env`** (loads **GOOGLE_SERVICE_ACCOUNT_JSON**, spreadsheet IDs, optional **ASSEMBLED_API_KEY**, etc.), and a draft **`deploy --build`**.
+
+   Production cutover:
+
+   ```bash
+   npx netlify-cli deploy --prod --build
+   ```
+
+   Optional CI token: set **`NETLIFY_AUTH_TOKEN`** (site-specific deploy token or personal access token per Netlify docs) for non-interactive deploys.
+
+3. **Rotate service account key** (if the JSON was ever pasted into chat, logs, or a ticket)
+
+   In **Google Cloud Console** → IAM & Admin → Service Accounts → your reader SA → **Keys** → **Add key** → JSON → download → **disable/delete** the old key.
+
+   Then update **`GOOGLE_SERVICE_ACCOUNT_JSON`** in Netlify (env UI or `env:import` from refreshed `.env`) and regenerate local `.env` with `bootstrap-local-env.js`.
 
 ### Netlify CLI (`netlify dev`)
 

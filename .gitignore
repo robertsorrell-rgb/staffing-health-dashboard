@@ -3,6 +3,4 @@ node_modules/
 sheet-credentials.json
 *.pem
 .DS_Store
-
-# Local Netlify folder
-.netlify
+.netlify/
