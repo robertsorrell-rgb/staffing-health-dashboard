@@ -45,7 +45,7 @@ Instead set **only**:
 
 | Variable | Required? |
 |----------|-----------|
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | **Yes** — full service account JSON (one line). |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | **Yes** — **only** the JSON file contents (`{ ... }`). Do **not** paste `GOOGLE_SERVICE_ACCOUNT_JSON=` or the `.env` line; Netlify adds the key name. |
 | `ASSEMBLED_API_KEY` | Optional — only if you use Assembled for net staffing. |
 | `ADHERENCE_DIGEST_URL` | Optional — small URL string if you use it. |
 

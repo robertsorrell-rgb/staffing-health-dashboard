@@ -6,20 +6,51 @@ const SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly'];
 
 let _sheetsClient = null;
 
+/** Normalize SA JSON from Netlify/UI paste accidents (BOM, env line prefix, double-encoding). */
+function parseServiceAccountJson(raw) {
+  let s = String(raw || '').trim();
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1).trim();
+
+  s = s.replace(/^GOOGLE_SERVICE_ACCOUNT_JSON\s*=\s*/i, '').trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(s);
+  } catch (e1) {
+    const peek = s.slice(0, 24).replace(/[^\x20-\x7e]/g, '?');
+    const hint =
+      peek.charAt(0) !== '{'
+        ? ' Paste only the JSON file contents starting with `{`, not `GOOGLE_SERVICE_ACCOUNT_JSON=...`.'
+        : '';
+    const err = new Error(`GOOGLE_SERVICE_ACCOUNT_JSON is set but not valid JSON: ${e1.message}.${hint}`);
+    err.statusCode = 500;
+    throw err;
+  }
+
+  if (parsed && typeof parsed === 'object' && parsed.type === 'service_account') return parsed;
+  if (typeof parsed === 'string') {
+    try {
+      const inner = JSON.parse(parsed);
+      if (inner && typeof inner === 'object' && inner.type === 'service_account') return inner;
+    } catch {
+      /* fall through */
+    }
+  }
+  const err = new Error(
+    'GOOGLE_SERVICE_ACCOUNT_JSON parsed but is not a service account object (expected `"type":"service_account"`).'
+  );
+  err.statusCode = 500;
+  throw err;
+}
+
 function loadCredentials() {
-  const raw = (process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '').trim();
-  if (!raw) {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '';
+  if (!String(raw).trim()) {
     const err = new Error('GOOGLE_SERVICE_ACCOUNT_JSON env var is not set');
     err.statusCode = 503;
     throw err;
   }
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    const err = new Error('GOOGLE_SERVICE_ACCOUNT_JSON is set but not valid JSON: ' + e.message);
-    err.statusCode = 500;
-    throw err;
-  }
+  return parseServiceAccountJson(raw);
 }
 
 function getSheetsClient() {
