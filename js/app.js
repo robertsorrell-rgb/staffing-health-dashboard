@@ -295,12 +295,8 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
   const autoSummary = autoPanel.summary || {};
   const autoRollup = autoPanel.rollup || {};
 
-  const rowsTargeted = data.configured === false && !errMsg ? '—' : sum.rows_targeted_offers_today ?? 0;
-  const committedTargeted = sum.committed_targeted_today ?? rollup.committed_offers_today ?? 0;
   const rowsAuto =
     sum.rows_auto_today ?? autoSummary.rows_today ?? 0;
-  const approvedAuto =
-    sum.approved_auto_today ?? auto.approved_today ?? autoSummary.approved_today ?? 0;
   const hoursTargeted = sum.hours_targeted_from_offers ?? rollup.total_hours ?? 0;
   const hoursAuto =
     sum.hours_auto_approved ?? auto.hours_approved_today ?? autoSummary.hours_approved_today ?? 0;
@@ -322,14 +318,7 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     }
 
     body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours today</span> <strong class="rollup-total-value">${formatHoursDisplay(hoursCombined)} h</strong></div>`;
-    body += `<p class="panel-muted rollup-breakdown">Targeted (COMMITTED): <strong>${formatHoursDisplay(hoursTargeted)} h</strong> · Automated (Decision Approved): <strong>${formatHoursDisplay(hoursAuto)} h</strong></p>`;
 
-    if (rollup.hours_basis_note) {
-      body += `<p class="panel-muted rollup-basis">${escapeHtml(rollup.hours_basis_note)}</p>`;
-    }
-    if (typeof rollup.offers_other_status_today === 'number' && rollup.offers_other_status_today > 0) {
-      body += `<p class="panel-muted rollup-missing">${rollup.offers_other_status_today} offer row(s) today are not COMMITTED.</p>`;
-    }
     if (typeof rollup.rows_missing_hours === 'number' && rollup.rows_missing_hours > 0) {
       body += `<p class="panel-muted rollup-missing">${rollup.rows_missing_hours} COMMITTED offer row(s) missing hour value.</p>`;
     }
@@ -370,20 +359,10 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     }
   }
 
-  const metaBits = [];
-  if (data.offers_tab) metaBits.push(`Offers: ${escapeHtml(data.offers_tab)}`);
-  if (data.auto_tab) metaBits.push(`Automated: ${escapeHtml(data.auto_tab)}`);
-  if (data.auto_date_column_used || autoPanel.date_column_used) {
-    metaBits.push(`Automated date filter: ${escapeHtml(data.auto_date_column_used || autoPanel.date_column_used)}`);
-  }
-
   return `
     <div class="panel-card panel-exception" id="panel-targeted-vto-bot">
       <div class="panel-title">VTO approvals</div>
       ${errMsg ? `<p class="panel-error">${escapeHtml(errMsg)}</p>` : ''}
-      <div class="panel-sub">Offers today (CT): <strong>${rowsTargeted}</strong> · COMMITTED: <strong>${committedTargeted}</strong></div>
-      <div class="panel-sub">Requests_Submissions today (CT): <strong>${rowsAuto}</strong> · Approved (J): <strong>${approvedAuto}</strong></div>
-      ${metaBits.length ? `<p class="panel-muted" style="margin-top:4px;font-size:11px;">${metaBits.join(' · ')}</p>` : ''}
       ${data.configured === false && !errMsg ? `<p class="panel-muted">${data.note || 'Not configured'}</p>` : ''}
       ${body}
     </div>
