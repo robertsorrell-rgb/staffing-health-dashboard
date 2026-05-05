@@ -171,7 +171,7 @@ node scripts/smoke-endpoints.js      # adherence, targeted-vto, others (needs .e
 | `/api/net-staffing` | Net staffing matrix (Assembled + sheet fallback) |
 | `/api/idle-hourly-log` | Weighted idle % from hourly log |
 | `/api/adherence` | Ping counts + digest link |
-| `/api/targeted-vto` | Offers tab rollups + **VTO_Summary** tab for combined/targeted/automated hour totals (formulas in the sheet) |
+| `/api/targeted-vto` | Combined approvals computed from Offers (COMMITTED) + Requests_Submissions (Decision Approved) |
 | `/api/auto-vto` | Requests_Submissions rows today (raw preview panel) |
 | `/api/bobbot` | Bobbot rows today |
 | `/api/callout` | Call-out + optional attendance tab |

@@ -2,6 +2,7 @@
 
 const { ok, errorResponse, handleOptions } = require('./_sheets.js');
 const { readSheetFilterToday } = require('./lib/filter-today.js');
+const { rollupAutoVtoApproved } = require('./lib/auto-vto-approved-rollup.js');
 const { env } = require('./lib/deploy-defaults.js');
 
 const CACHE_SEC = parseInt(env('AUTO_VTO_CACHE_SECONDS'), 10);
@@ -31,6 +32,7 @@ exports.handler = async (event) => {
       }
     }
     const { headers, rowsToday, rowsAll, today, dateCol } = active;
+    const rollup = rollupAutoVtoApproved(rowsToday, headers);
     const dateHeader = headers[dateCol] || '(column A)';
     let today_hint = null;
     if (rowsToday.length === 0) {
@@ -41,6 +43,8 @@ exports.handler = async (event) => {
       } else {
         today_hint = `No submissions for ${today} (CT).`;
       }
+    } else if (rollup.approved_today === 0) {
+      today_hint = `Rows found for ${today} (CT), but none have Decision = Approved.`;
     }
 
     return ok(
@@ -48,7 +52,12 @@ exports.handler = async (event) => {
         configured: true,
         today,
         date_column_used: dateHeader,
-        summary: { rows_today: rowsToday.length },
+        summary: {
+          rows_today: rowsToday.length,
+          approved_today: rollup.approved_today,
+          hours_approved_today: rollup.hours_approved_today,
+        },
+        rollup,
         today_hint,
         headers,
         rows_preview: rowsToday.slice(0, 50),

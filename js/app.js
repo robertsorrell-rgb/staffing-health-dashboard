@@ -284,102 +284,78 @@ function formatHoursDisplay(h) {
   return String(n).replace(/\.?0+$/, '');
 }
 
-/** Combined VTO headline comes from sheet tab VTO_Summary (formulas); Offers tab still powers drill-down tables. */
+/** Combined VTO = Offers(COMMITTED) + Requests_Submissions(Decision Approved). */
 function targetedVtoPanel(data, errMsg) {
   const rollup = data.rollup || {};
+  const auto = data.automated_rollup || {};
+  const combined = data.combined || {};
   const sum = data.summary || {};
-  const ss = data.sheet_summary || {};
 
-  const rowsTargeted =
-    data.configured === false && !errMsg ? '—' : sum.rows_targeted_offers_today ?? '—';
-  const committedTargeted =
-    sum.committed_targeted_today ?? rollup.committed_offers_today ?? '—';
-  const fromOffers = sum.hours_targeted_from_offers ?? rollup.total_hours ?? null;
-
-  const combined = ss.combined_approved_hours;
-  const shTargeted = ss.targeted_committed_hours;
-  const shAuto = ss.automated_approved_hours;
-
-  const otherStatus = rollup.offers_other_status_today ?? 0;
-  const targetedMissing = rollup.rows_missing_hours ?? 0;
+  const rowsTargeted = data.configured === false && !errMsg ? '—' : sum.rows_targeted_offers_today ?? 0;
+  const committedTargeted = sum.committed_targeted_today ?? rollup.committed_offers_today ?? 0;
+  const rowsAuto = sum.rows_auto_today ?? 0;
+  const approvedAuto = sum.approved_auto_today ?? auto.approved_today ?? 0;
+  const hoursTargeted = sum.hours_targeted_from_offers ?? rollup.total_hours ?? 0;
+  const hoursAuto = sum.hours_auto_approved ?? auto.hours_approved_today ?? 0;
+  const hoursCombined = sum.hours_combined_approved ?? combined.hours_approved ?? 0;
 
   let body = '';
   if (!errMsg && data.configured !== false) {
     if (data.targeted_fetch_error) {
       body += `<p class="panel-error">Offers tab: ${escapeHtml(data.targeted_fetch_error)}</p>`;
     }
-    if (data.sheet_summary_error) {
-      body += `<p class="panel-error">Summary tab: ${escapeHtml(data.sheet_summary_error)}</p>`;
+    if (data.auto_fetch_error) {
+      body += `<p class="panel-error">Requests_Submissions tab: ${escapeHtml(data.auto_fetch_error)}</p>`;
     }
 
-    const hero =
-      combined != null && !Number.isNaN(Number(combined))
-        ? `${formatHoursDisplay(combined)} h`
-        : '—';
-    body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours</span> <strong class="rollup-total-value">${hero}</strong></div>`;
-    body += `<p class="panel-muted rollup-breakdown">From <strong>${escapeHtml(ss.tab || 'VTO_Summary')}</strong> — Targeted: <strong>${formatHoursDisplay(shTargeted)} h</strong> · Automated: <strong>${formatHoursDisplay(shAuto)} h</strong></p>`;
-    body += `<p class="panel-muted rollup-basis">Cross-check (parsed from Offers, COMMITTED only): <strong>${formatHoursDisplay(fromOffers)} h</strong></p>`;
-
-    if (combined == null && !data.sheet_summary_error) {
-      body += `<p class="panel-muted rollup-missing">On the summary tab, add column A label <strong>Combined approved hours</strong> and the total in column B (use formulas / IMPORTRANGE). See <code>docs/sheet-contracts.md</code>.</p>`;
-    }
+    body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours today</span> <strong class="rollup-total-value">${formatHoursDisplay(hoursCombined)} h</strong></div>`;
+    body += `<p class="panel-muted rollup-breakdown">Targeted (COMMITTED): <strong>${formatHoursDisplay(hoursTargeted)} h</strong> · Automated (Decision Approved): <strong>${formatHoursDisplay(hoursAuto)} h</strong></p>`;
 
     if (rollup.hours_basis_note) {
       body += `<p class="panel-muted rollup-basis">${escapeHtml(rollup.hours_basis_note)}</p>`;
     }
-    if (typeof otherStatus === 'number' && otherStatus > 0) {
-      body += `<p class="panel-muted rollup-missing">${otherStatus} offer row(s) today are not COMMITTED.</p>`;
+    if (typeof rollup.offers_other_status_today === 'number' && rollup.offers_other_status_today > 0) {
+      body += `<p class="panel-muted rollup-missing">${rollup.offers_other_status_today} offer row(s) today are not COMMITTED.</p>`;
     }
-    if (targetedMissing > 0) {
-      body += `<p class="panel-muted rollup-missing">${targetedMissing} COMMITTED row(s) missing hour value.</p>`;
+    if (typeof rollup.rows_missing_hours === 'number' && rollup.rows_missing_hours > 0) {
+      body += `<p class="panel-muted rollup-missing">${rollup.rows_missing_hours} COMMITTED offer row(s) missing hour value.</p>`;
+    }
+    if (typeof auto.approved_today === 'number' && auto.approved_today === 0 && rowsAuto > 0) {
+      body += `<p class="panel-muted rollup-missing">Requests_Submissions rows found today, but none had Decision = Approved.</p>`;
     }
 
-    const tq = rollup.by_queue || [];
-    if (tq.length) {
-      body += `<div class="panel-sub rollup-section-title">Offers — approved by queue (COMMITTED)</div>`;
-      const qh = `<thead><tr><th>Queue</th><th class="num">Offers</th><th class="num">Hours</th></tr></thead>`;
-      const qb = tq
-        .map(
-          (q) =>
-            `<tr><td title="${escapeAttr(q.queue)}">${escapeHtml(q.queue)}</td><td class="num">${q.offers}</td><td class="num">${formatHoursDisplay(q.hours)} h</td></tr>`
-        )
+    const cg = combined.by_group || [];
+    if (cg.length) {
+      body += `<div class="panel-sub rollup-section-title">Combined by sales group</div>`;
+      const h = `<thead><tr><th>Sales group</th><th class="num">Targeted h</th><th class="num">Automated h</th><th class="num">Total h</th></tr></thead>`;
+      const b = cg
+        .map((r) => `<tr><td title="${escapeAttr(r.group)}">${escapeHtml(r.group)}</td><td class="num">${formatHoursDisplay(r.targeted_hours)}</td><td class="num">${formatHoursDisplay(r.automated_hours)}</td><td class="num">${formatHoursDisplay(r.total_hours)}</td></tr>`)
         .join('');
-      body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${qh}<tbody>${qb}</tbody></table></div>`;
+      body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
     }
 
-    const ttl = rollup.timeline || [];
-    if (ttl.length) {
-      body += `<div class="panel-sub rollup-section-title">Offers — sent (Central)</div>`;
-      const th = `<thead><tr><th>Sent (CT)</th><th>Queue</th><th class="num">Hours</th><th>Name</th></tr></thead>`;
-      const tb = ttl
-        .map((t) => {
-          const hrs = t.hours != null ? `${formatHoursDisplay(t.hours)} h` : '—';
-          return `<tr><td>${escapeHtml(t.sent_ct)}</td><td title="${escapeAttr(t.queue)}">${escapeHtml(t.queue)}</td><td class="num">${escapeHtml(hrs)}</td><td title="${escapeAttr(t.name)}">${escapeHtml(t.name)}</td></tr>`;
-        })
+    const ar = (auto.approved_rows || []).slice(0, 25);
+    if (ar.length) {
+      body += `<div class="panel-sub rollup-section-title">Automated approvals detail (Requests_Submissions)</div>`;
+      const h = `<thead><tr><th>Rep (D)</th><th>Sales group / Role (E)</th><th class="num">Hours (I)</th><th>Date Requested (F)</th></tr></thead>`;
+      const b = ar
+        .map((r) => `<tr><td>${escapeHtml(r.rep || '')}</td><td>${escapeHtml(r.role || '')}</td><td class="num">${formatHoursDisplay(r.hours)}</td><td>${escapeHtml(r.date_requested || '')}</td></tr>`)
         .join('');
-      body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${th}<tbody>${tb}</tbody></table></div>`;
-    }
-
-    const rtNum = Number(rowsTargeted);
-    const cNum = Number(committedTargeted);
-    if (!tq.length && !ttl.length && rollup) {
-      if (Number.isFinite(rtNum) && rtNum === 0) {
-        body += `<p class="panel-muted">No Offers rows for today (Date column, CT).</p>`;
-      } else if (Number.isFinite(rtNum) && rtNum > 0 && Number.isFinite(cNum) && cNum === 0) {
-        body += `<p class="panel-muted">Offers exist for today but none are COMMITTED yet.</p>`;
-      }
+      body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
     }
   }
 
   const metaBits = [];
   if (data.offers_tab) metaBits.push(`Offers: ${escapeHtml(data.offers_tab)}`);
-  if (ss.tab) metaBits.push(`Summary: ${escapeHtml(ss.tab)}`);
+  if (data.auto_tab) metaBits.push(`Automated: ${escapeHtml(data.auto_tab)}`);
+  if (data.auto_date_column_used) metaBits.push(`Automated date filter: ${escapeHtml(data.auto_date_column_used)}`);
 
   return `
     <div class="panel-card panel-exception" id="panel-targeted-vto-bot">
       <div class="panel-title">VTO approvals</div>
       ${errMsg ? `<p class="panel-error">${escapeHtml(errMsg)}</p>` : ''}
-      <div class="panel-sub">Offers with Date = today (CT): <strong>${rowsTargeted}</strong> · COMMITTED: <strong>${committedTargeted}</strong></div>
+      <div class="panel-sub">Offers today (CT): <strong>${rowsTargeted}</strong> · COMMITTED: <strong>${committedTargeted}</strong></div>
+      <div class="panel-sub">Requests_Submissions today (CT): <strong>${rowsAuto}</strong> · Approved (J): <strong>${approvedAuto}</strong></div>
       ${metaBits.length ? `<p class="panel-muted" style="margin-top:4px;font-size:11px;">${metaBits.join(' · ')}</p>` : ''}
       ${data.configured === false && !errMsg ? `<p class="panel-muted">${data.note || 'Not configured'}</p>` : ''}
       ${body}

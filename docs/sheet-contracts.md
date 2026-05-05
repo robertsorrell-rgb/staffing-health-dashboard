@@ -183,35 +183,30 @@ Datetime serials must yield the calendar date in **America/Chicago** (not UTC mi
 
 ### Parser (`targeted-vto.js`)
 
-`GET /api/targeted-vto` reads **only** the Targeted VTO Bot workbook (`TARGETED_VTO_SPREADSHEET_ID`):
+`GET /api/targeted-vto` computes **combined approved VTO hours** directly from source tabs (no summary tab dependency):
 
-1. **`Offers`** — same rollup as below (drill-down tables on the dashboard).
-2. **`VTO_Summary`** (default) — **label / value** rows for headline totals. Use **formulas**, **IMPORTRANGE**, **QUERY**, etc. here so TVTO + automated VTO roll up **in the sheet** (no second workbook in this function).
-
-**Env:** `TARGETED_VTO_SUMMARY_TAB` (default `VTO_Summary`), `TARGETED_VTO_SUMMARY_RANGE` (default `A1:F25`).
-
-#### VTO_Summary — column A label, column B value (exact labels, any row)
-
-| Column A (label) | Column B (value) |
-|------------------|------------------|
-| `Combined approved hours` | Total approved VTO hours today (your formula). |
-| `Targeted committed hours` | Subtotal from Targeted / Offers path (optional). |
-| `Automated approved hours` | Subtotal from Request Processor / other workbook (optional). |
-
-Aliases also accepted: **`Total approved VTO hours`**, **`Targeted VTO approved hours`**, **`Automated VTO approved hours`** (see `lib/vto-summary-sheet.js`).
+1. **Targeted Offers (`TARGETED_VTO_TAB`, default `Offers`)**
+2. **Automated Requests (`AUTO_VTO_TAB`, default `Requests_Submissions`)**
 
 #### Targeted Offers (`filter-today` + rollup)
 
-- **`preferDateHeaders`:** **`Date`** (column **C**) — “today” = **calendar date in Central Time**, same as other dashboard panels.
-- **Tab:** **`Offers`** (`TARGETED_VTO_TAB`).
-- Range default reads **`A1:ZZ20000`**.
-- **`rollup` (API response):**
-  - **Approved offers** = rows where **`Status`** (column **N**) is **`COMMITTED`** (case-insensitive).
-  - **`total_hours`:** summed **only for COMMITTED** rows (cross-check vs **Targeted committed hours** on `VTO_Summary`).
-  - **Hours math:** **`End − Start`** using **`HH:MM`** text in columns **D/E** when present; otherwise full **datetime serial** subtraction; otherwise **`Hold Hours`** (column **M**).
-  - **By queue:** **`Queue`** column **I** (sales group).
-  - **Timeline:** **`Sent At`** (column **K**) formatted in **Central Time** when numeric serial.
+- **Today filter:** `Date` (column **C**) in Central Time.
+- **Approved rows:** `Status` (column **N**) = `COMMITTED` (case-insensitive).
+- **Hours:** `End - Start` from columns **D/E** (`HH:MM`) when possible; datetime-serial fallback; then `Hold Hours` (column **M**).
+- **Grouping:** `Queue` (column **I**).
 
+#### Automated Requests_Submissions (`filter-today` + rollup)
+
+- **Today filter:** prefer `Date Requested` (column **F**), fallback to `Timestamp` if needed.
+- **Approved rows:** `Decision` (column **J**) = `Approved` (case-insensitive).
+- **Hours:** numeric `Hours` (column **I**).
+- **Rep:** column **D** (`Rep Name`).
+- **Sales group:** column **E** (`Role`).
+
+#### Combined output
+
+- **`summary.hours_combined_approved`** = targeted approved hours + automated approved hours.
+- **`combined.by_group`** merges Targeted queue + Automated role (case-insensitive normalized key).
 ---
 
 ## VTO Request Processor — Requests_Submissions (automated)
@@ -238,7 +233,7 @@ Aliases also accepted: **`Total approved VTO hours`**, **`Targeted VTO approved 
 
 **Today column (`readSheetFilterToday`):** prefer **`Date Requested`**, then **`Timestamp`** — “today” is the **Central** calendar date on that column.
 
-**Dashboard:** raw rows today appear in the **Automated VTO** panel via **`GET /api/auto-vto`**. Combined headline totals should be **referenced into `VTO_Summary`** on the Targeted workbook, not merged in application code.
+**Dashboard:** raw rows today appear in the **Automated VTO** panel via **`GET /api/auto-vto`**; the VTO approvals card also includes automated approvals inside the combined total.
 
 ---
 
