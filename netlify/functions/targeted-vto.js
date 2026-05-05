@@ -1,11 +1,11 @@
 'use strict';
 
 const { ok, handleOptions } = require('./_sheets.js');
-const { readSheetFilterToday } = require('./lib/filter-today.js');
+const { readSheetFilterToday, readSheetFilterWeek } = require('./lib/filter-today.js');
 const { rollupTargetedOffers } = require('./lib/targeted-vto-rollup.js');
 const { rollupAutoVtoApproved } = require('./lib/auto-vto-approved-rollup.js');
 const { applyCanonicalToAutomatedRollup, canonicalVtoSalesGroup } = require('./lib/vto-canonical-sales-group.js');
-const { todayCTDateStr } = require('./lib/ct.js');
+const { todayCTDateStr, currentChicagoWeekSundayToSaturday } = require('./lib/ct.js');
 const { env } = require('./lib/deploy-defaults.js');
 
 const CACHE_SEC = parseInt(env('TARGETED_VTO_CACHE_SECONDS'), 10);
@@ -88,6 +88,70 @@ exports.handler = async (event) => {
   const combinedHours = Math.round((targetedHours + autoHours) * 100) / 100;
   const combinedByGroup = mergeByGroup(rollup.by_queue || [], auto.by_role || []);
 
+  const weekMeta = currentChicagoWeekSundayToSaturday();
+  let rollupWeek = emptyTargetedRollup();
+  let autoWeek = emptyAutoRollup();
+  let autoWeekDateColumnUsed = null;
+  let weekTargetedError = null;
+  let weekAutoError = null;
+
+  if (targetedSpreadsheetId) {
+    try {
+      const rw = await readSheetFilterWeek(
+        targetedSpreadsheetId,
+        offersTab,
+        'A1:ZZ20000',
+        { preferDateHeaders: ['Date', 'date'] },
+        weekMeta.week_start,
+        weekMeta.week_end
+      );
+      rollupWeek =
+        rw.headers.length && rw.rowsWeek.length
+          ? rollupTargetedOffers(rw.rowsWeek, rw.headers)
+          : emptyTargetedRollup();
+    } catch (err) {
+      weekTargetedError = err.message || String(err);
+      rollupWeek = emptyTargetedRollup();
+    }
+  }
+
+  if (autoSpreadsheetId) {
+    try {
+      const [byRequestedW, byTimestampW] = await Promise.all([
+        readSheetFilterWeek(
+          autoSpreadsheetId,
+          autoTab,
+          'A1:ZZ20000',
+          { preferDateHeaders: ['Date Requested', 'date requested', 'Timestamp', 'timestamp'] },
+          weekMeta.week_start,
+          weekMeta.week_end
+        ),
+        readSheetFilterWeek(
+          autoSpreadsheetId,
+          autoTab,
+          'A1:ZZ20000',
+          { preferDateHeaders: ['Timestamp', 'timestamp', 'Date Requested', 'date requested'] },
+          weekMeta.week_start,
+          weekMeta.week_end
+        ),
+      ]);
+      const activeW =
+        (byTimestampW.rowsWeek || []).length > (byRequestedW.rowsWeek || []).length ? byTimestampW : byRequestedW;
+      autoWeekDateColumnUsed = activeW.headers?.[activeW.dateCol] || null;
+      autoWeek =
+        activeW.headers && activeW.headers.length
+          ? applyCanonicalToAutomatedRollup(
+              rollupAutoVtoApproved(activeW.rowsWeek || [], activeW.headers)
+            )
+          : emptyAutoRollup();
+    } catch (err) {
+      weekAutoError = err.message || String(err);
+      autoWeek = emptyAutoRollup();
+    }
+  }
+
+  const combinedWeekByGroup = mergeByGroup(rollupWeek.by_queue || [], autoWeek.by_role || []);
+
   return ok(
     {
       configured: true,
@@ -111,6 +175,15 @@ exports.handler = async (event) => {
       combined: {
         hours_approved: combinedHours,
         by_group: combinedByGroup,
+      },
+      combined_week: {
+        by_group: combinedWeekByGroup,
+        week_start: weekMeta.week_start,
+        week_end: weekMeta.week_end,
+        label: weekMeta.label,
+        auto_date_column_used: autoWeekDateColumnUsed,
+        targeted_fetch_error: weekTargetedError,
+        auto_fetch_error: weekAutoError,
       },
       fetched_at: new Date().toISOString(),
     },

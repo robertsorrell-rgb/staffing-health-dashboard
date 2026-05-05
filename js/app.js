@@ -1,5 +1,5 @@
 import { heatmapBandClass } from './heatmap-bands.js';
-import { canonicalVtoSalesGroup, mergeCombinedByGroupRows } from './vto-canonical-sales-group.js';
+import { mergeCombinedByGroupRows } from './vto-canonical-sales-group.js';
 
 const REFRESH_MS = parseInt(
   typeof window.__REFRESH_MS__ === 'number' ? window.__REFRESH_MS__ : 150000,
@@ -294,14 +294,29 @@ function formatHoursCeilUp(h) {
   return String(Math.ceil(num));
 }
 
+function htmlVtoCombinedByGroupTable(mergedRows, sectionTitle) {
+  if (!mergedRows?.length) return '';
+  const h = `<thead><tr><th>Sales group</th><th class="num">Targeted h</th><th class="num">Automated h</th><th class="num">Total h</th></tr></thead>`;
+  const b = mergedRows
+    .map((r) => {
+      const tip = escapeAttr(`Bucket: ${r.group}`);
+      const th = Number(r.targeted_hours) || 0;
+      const ah = Number(r.automated_hours) || 0;
+      const totalCeil = Math.ceil(th + ah);
+      return `<tr><td title="${tip}">${escapeHtml(r.group)}</td><td class="num">${formatHoursCeilUp(r.targeted_hours)}</td><td class="num">${formatHoursCeilUp(r.automated_hours)}</td><td class="num">${String(totalCeil)}</td></tr>`;
+    })
+    .join('');
+  return `<div class="panel-sub rollup-section-title">${escapeHtml(sectionTitle)}</div><div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
+}
+
 /** Combined VTO = Offers(COMMITTED) + Requests_Submissions(Decision Approved). */
 function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
   const rollup = data.rollup || {};
   const auto = data.automated_rollup || {};
   const combined = data.combined || {};
+  const combinedWeek = data.combined_week || {};
   const sum = data.summary || {};
   const autoSummary = autoPanel.summary || {};
-  const autoRollup = autoPanel.rollup || {};
 
   const rowsAuto =
     sum.rows_auto_today ?? autoSummary.rows_today ?? 0;
@@ -334,40 +349,21 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       body += `<p class="panel-muted rollup-missing">Requests_Submissions rows found today, but none had Decision = Approved.</p>`;
     }
 
-    const cg = mergeCombinedByGroupRows(combined.by_group || []);
-    if (cg.length) {
-      body += `<div class="panel-sub rollup-section-title">Combined by sales group</div>`;
-      const h = `<thead><tr><th>Sales group</th><th class="num">Targeted h</th><th class="num">Automated h</th><th class="num">Total h</th></tr></thead>`;
-      const b = cg
-        .map((r) => {
-          const tip = escapeAttr(`Bucket: ${r.group}`);
-          const th = Number(r.targeted_hours) || 0;
-          const ah = Number(r.automated_hours) || 0;
-          const totalCeil = Math.ceil(th + ah);
-          return `<tr><td title="${tip}">${escapeHtml(r.group)}</td><td class="num">${formatHoursCeilUp(r.targeted_hours)}</td><td class="num">${formatHoursCeilUp(r.automated_hours)}</td><td class="num">${String(totalCeil)}</td></tr>`;
-        })
-        .join('');
-      body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
-    }
+    body += htmlVtoCombinedByGroupTable(
+      mergeCombinedByGroupRows(combined.by_group || []),
+      'Combined by sales group (today)'
+    );
 
-    const ar = (auto.approved_rows || autoRollup.approved_rows || []).slice(0, 25);
-    if (ar.length) {
-      body += `<div class="panel-sub rollup-section-title">Automated approvals detail (Requests_Submissions)</div>`;
-      const h = `<thead><tr><th>Rep (D)</th><th>Sales group / Role (E)</th><th class="num">Hours (I)</th><th>Date Requested (F)</th></tr></thead>`;
-      const b = ar
-        .map((r) => {
-          const sheetRole = String(r.role_raw || r.role || '').trim();
-          const displayRole = canonicalVtoSalesGroup(sheetRole || r.role || '');
-          const title =
-            sheetRole && displayRole !== sheetRole ? escapeAttr(`Sheet: ${sheetRole}`) : '';
-          const roleCell = title
-            ? `<td title="${title}">${escapeHtml(displayRole)}</td>`
-            : `<td>${escapeHtml(displayRole)}</td>`;
-          return `<tr><td>${escapeHtml(r.rep || '')}</td>${roleCell}<td class="num">${formatHoursCeilUp(r.hours)}</td><td>${escapeHtml(r.date_requested || '')}</td></tr>`;
-        })
-        .join('');
-      body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
+    if (combinedWeek.targeted_fetch_error) {
+      body += `<p class="panel-error">Offers tab (week): ${escapeHtml(combinedWeek.targeted_fetch_error)}</p>`;
     }
+    if (combinedWeek.auto_fetch_error) {
+      body += `<p class="panel-error">Requests_Submissions tab (week): ${escapeHtml(combinedWeek.auto_fetch_error)}</p>`;
+    }
+    const weekTitle = combinedWeek.label
+      ? `Combined by sales group (${combinedWeek.label}; Sun–Sat, CT)`
+      : 'Combined by sales group (this week; Sun–Sat, CT)';
+    body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combinedWeek.by_group || []), weekTitle);
   }
 
   return `
