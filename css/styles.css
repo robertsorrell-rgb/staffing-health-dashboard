@@ -401,6 +401,16 @@ a.digest-link {
   border-radius: var(--radius);
   border: 1px solid var(--border);
 }
+/* VTO approvals card: KPI strip does not need full panel width */
+#panel-targeted-vto-bot .rollup-total {
+  max-width: 50%;
+  box-sizing: border-box;
+}
+@media (max-width: 720px) {
+  #panel-targeted-vto-bot .rollup-total {
+    max-width: 100%;
+  }
+}
 .rollup-total-label {
   display: block;
   font-size: 11px;
