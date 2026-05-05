@@ -286,6 +286,14 @@ function formatHoursDisplay(h) {
   return String(n).replace(/\.?0+$/, '');
 }
 
+/** Whole hours, always rounded up (VTO approvals card). */
+function formatHoursCeilUp(h) {
+  if (h === null || h === undefined || h === '') return '—';
+  const num = Number(h);
+  if (Number.isNaN(num)) return '—';
+  return String(Math.ceil(num));
+}
+
 /** Combined VTO = Offers(COMMITTED) + Requests_Submissions(Decision Approved). */
 function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
   const rollup = data.rollup || {};
@@ -317,7 +325,7 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       body += `<p class="panel-error">Automated panel fallback: ${escapeHtml(autoPanelErr)}</p>`;
     }
 
-    body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours today</span> <strong class="rollup-total-value">${formatHoursDisplay(hoursCombined)} h</strong></div>`;
+    body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours today</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursCombined)} h</strong></div>`;
 
     if (typeof rollup.rows_missing_hours === 'number' && rollup.rows_missing_hours > 0) {
       body += `<p class="panel-muted rollup-missing">${rollup.rows_missing_hours} COMMITTED offer row(s) missing hour value.</p>`;
@@ -333,7 +341,10 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       const b = cg
         .map((r) => {
           const tip = escapeAttr(`Bucket: ${r.group}`);
-          return `<tr><td title="${tip}">${escapeHtml(r.group)}</td><td class="num">${formatHoursDisplay(r.targeted_hours)}</td><td class="num">${formatHoursDisplay(r.automated_hours)}</td><td class="num">${formatHoursDisplay(r.total_hours)}</td></tr>`;
+          const th = Number(r.targeted_hours) || 0;
+          const ah = Number(r.automated_hours) || 0;
+          const totalCeil = Math.ceil(th + ah);
+          return `<tr><td title="${tip}">${escapeHtml(r.group)}</td><td class="num">${formatHoursCeilUp(r.targeted_hours)}</td><td class="num">${formatHoursCeilUp(r.automated_hours)}</td><td class="num">${String(totalCeil)}</td></tr>`;
         })
         .join('');
       body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
@@ -352,7 +363,7 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
           const roleCell = title
             ? `<td title="${title}">${escapeHtml(displayRole)}</td>`
             : `<td>${escapeHtml(displayRole)}</td>`;
-          return `<tr><td>${escapeHtml(r.rep || '')}</td>${roleCell}<td class="num">${formatHoursDisplay(r.hours)}</td><td>${escapeHtml(r.date_requested || '')}</td></tr>`;
+          return `<tr><td>${escapeHtml(r.rep || '')}</td>${roleCell}<td class="num">${formatHoursCeilUp(r.hours)}</td><td>${escapeHtml(r.date_requested || '')}</td></tr>`;
         })
         .join('');
       body += `<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody></table></div>`;
