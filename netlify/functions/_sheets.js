@@ -6,38 +6,71 @@ const SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly'];
 
 let _sheetsClient = null;
 
-/** Normalize SA JSON from Netlify/UI paste accidents (BOM, env line prefix, double-encoding). */
+/** True when value looks like a GCP service account key object. */
+function isServiceAccountObject(o) {
+  return !!(o && typeof o === 'object' && o.type === 'service_account');
+}
+
+/** Normalize SA JSON from Netlify/UI/.env paste accidents (BOM, key prefix, quotes, smart quotes, double-encoding). */
 function parseServiceAccountJson(raw) {
   let s = String(raw || '').trim();
   if (s.charCodeAt(0) === 0xfeff) s = s.slice(1).trim();
 
   s = s.replace(/^GOOGLE_SERVICE_ACCOUNT_JSON\s*=\s*/i, '').trim();
 
-  let parsed;
-  try {
-    parsed = JSON.parse(s);
-  } catch (e1) {
-    const peek = s.slice(0, 24).replace(/[^\x20-\x7e]/g, '?');
-    const hint =
-      peek.charAt(0) !== '{'
-        ? ' Paste only the JSON file contents starting with `{`, not `GOOGLE_SERVICE_ACCOUNT_JSON=...`.'
-        : '';
-    const err = new Error(`GOOGLE_SERVICE_ACCOUNT_JSON is set but not valid JSON: ${e1.message}.${hint}`);
-    err.statusCode = 500;
-    throw err;
+  // Curly/smart quotes pasted from editors
+  s = s.replace(/[\u201c\u201d\u201e\u201f]/g, '"').replace(/[\u2018\u2019]/g, "'");
+
+  // Netlify CLI / dotenv double-quoted lines can surface as `{\"type\":...}` (column 2 is `\`), which is not valid JSON.
+  // Structural `\"` → `"` is safe for standard service-account keys (no `\"` inside PEM text).
+  if (s.startsWith('{') && s[1] === '\\' && s[2] === '"') {
+    s = s.replace(/\\"/g, '"');
   }
 
-  if (parsed && typeof parsed === 'object' && parsed.type === 'service_account') return parsed;
-  if (typeof parsed === 'string') {
-    try {
-      const inner = JSON.parse(parsed);
-      if (inner && typeof inner === 'object' && inner.type === 'service_account') return inner;
-    } catch {
-      /* fall through */
+  const candidates = [];
+  const add = (x) => {
+    const t = String(x || '').trim();
+    if (t && !candidates.includes(t)) candidates.push(t);
+  };
+  add(s);
+  if (s.length >= 2) {
+    const a = s[0];
+    const b = s[s.length - 1];
+    if ((a === '"' && b === '"') || (a === "'" && b === "'")) add(s.slice(1, -1).trim());
+  }
+
+  let lastParseError = /** @type {Error | null} */ (null);
+  for (const cand of candidates) {
+    let v = cand;
+    for (let depth = 0; depth < 8; depth++) {
+      let p;
+      try {
+        p = JSON.parse(v);
+      } catch (e) {
+        lastParseError = e;
+        break;
+      }
+      if (isServiceAccountObject(p)) return p;
+      if (typeof p === 'string') {
+        v = p.trim();
+        if (!v.startsWith('{')) {
+          lastParseError = new Error('Expected JSON object after decoding string layer');
+          break;
+        }
+        continue;
+      }
+      lastParseError = new Error('JSON parsed but is not a service_account object');
+      break;
     }
   }
+
+  const peek = s.slice(0, 24).replace(/[^\x20-\x7e]/g, '?');
+  const hint =
+    peek.charAt(0) !== '{'
+      ? ' Use the raw JSON key file, or run: node scripts/bootstrap-local-env.js path/to/key.json'
+      : '';
   const err = new Error(
-    'GOOGLE_SERVICE_ACCOUNT_JSON parsed but is not a service account object (expected `"type":"service_account"`).'
+    `GOOGLE_SERVICE_ACCOUNT_JSON is set but not valid JSON: ${(lastParseError && lastParseError.message) || 'parse failed'}.${hint}`
   );
   err.statusCode = 500;
   throw err;

@@ -53,7 +53,11 @@ function addLine(line) {
 
 addLine('# Auto-generated — gitignored. Regenerate with: node scripts/bootstrap-local-env.js');
 addLine('# Credentials source: ' + credPath);
-addLine('GOOGLE_SERVICE_ACCOUNT_JSON=' + JSON.stringify(compact));
+if (/[\r\n']/.test(compact)) {
+  addLine('GOOGLE_SERVICE_ACCOUNT_JSON=' + JSON.stringify(compact));
+} else {
+  addLine("GOOGLE_SERVICE_ACCOUNT_JSON='" + compact + "'");
+}
 addLine('IDLE_CONSUMER_SPREADSHEET_ID=1MlHy2dB9JieEk4q72YhsEJLwvFFYJZ_fAI7s4M7mDLk');
 addLine('IDLE_CONSUMER_HOURLY_LOG_TAB=CS_Hourly_Log');
 
