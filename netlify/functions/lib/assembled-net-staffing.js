@@ -190,6 +190,44 @@ function parseNonNegMinute(name, fallback) {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+/**
+ * Which field drives “net” per 30‑min interval (Staffing timeline may match scheduled − actual requirement,
+ * while the API’s staffing_net can differ).
+ * api | sched_minus_actual | sched_minus_forecasted
+ */
+function netComputeMode() {
+  const m = (env('ASSEMBLED_NET_COMPUTE') || 'api').trim().toLowerCase().replace(/-/g, '_');
+  if (m === 'sched_minus_actual' || m === 'scheduled_minus_actual') return 'sched_minus_actual';
+  if (m === 'sched_minus_forecasted' || m === 'scheduled_minus_forecasted') return 'sched_minus_forecasted';
+  return 'api';
+}
+
+/** One interval’s net staffing (people-style), before hourly rollup. */
+function intervalNetStaffing(it, mode) {
+  const scheduled = Number(it.staffing_scheduled) || 0;
+  const r = it.staffing_required || {};
+  const forecasted = r.forecasted != null ? Number(r.forecasted) : NaN;
+  const actual = r.actual != null ? Number(r.actual) : NaN;
+
+  if (mode === 'sched_minus_actual') {
+    const req = Number.isFinite(actual) ? actual : forecasted;
+    if (!Number.isFinite(req)) return NaN;
+    return scheduled - req;
+  }
+  if (mode === 'sched_minus_forecasted') {
+    if (!Number.isFinite(forecasted)) return NaN;
+    return scheduled - forecasted;
+  }
+
+  if (it.staffing_net != null && it.staffing_net !== '') {
+    const n = Number(it.staffing_net);
+    if (Number.isFinite(n)) return n;
+  }
+  const reqFallback = Number.isFinite(forecasted) ? forecasted : actual;
+  if (!Number.isFinite(reqFallback)) return NaN;
+  return scheduled - reqFallback;
+}
+
 /** CT hour 0–23 for interval start */
 function hourFromUnix(sec) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -226,6 +264,8 @@ async function pullForecastBuckets({
   pageSize,
   opStartMin,
   opEndMin,
+  scheduleId,
+  netMode,
 }) {
   const buckets = {};
   for (const q of capMap) buckets[q.label] = {};
@@ -251,6 +291,7 @@ async function pullForecastBuckets({
         qParams.site_id = siteId;
         qParams.site = siteId;
       }
+      if (scheduleId) qParams.schedule_id = scheduleId;
 
       const res = await assembledFetch(apiBase, apiKey, '/forecasted_vs_actuals', qParams);
       const intervals = res.forecasts_vs_actuals || res.forecasted_vs_actuals || [];
@@ -282,11 +323,7 @@ async function pullForecastBuckets({
           continue;
         }
 
-        const scheduled = Number(it.staffing_scheduled) || 0;
-        const required =
-          it.staffing_required && it.staffing_required.forecasted != null ? Number(it.staffing_required.forecasted) : 0;
-        let net =
-          it.staffing_net != null && it.staffing_net !== '' ? Number(it.staffing_net) : scheduled - required;
+        const net = intervalNetStaffing(it, netMode);
         if (!Number.isFinite(net)) {
           stats.droppedBadNet += 1;
           continue;
@@ -379,6 +416,8 @@ async function loadNetStaffingFromAssembled() {
   const missingQueueNames = queueNames.filter((q) => !queueIdMap[q]);
 
   const rollup = hourRollupMode();
+  const netMode = netComputeMode();
+  const scheduleId = (env('ASSEMBLED_SCHEDULE_ID') || '').trim();
 
   const dateIso = todayIsoCt();
   const dayStartMs = chicagoMidnightUtcMs(dateIso);
@@ -405,6 +444,8 @@ async function loadNetStaffingFromAssembled() {
     pageSize,
     opStartMin,
     opEndMin,
+    scheduleId,
+    netMode,
   });
   pullStats = addPullStats(pullStats, pull1.stats);
   let buckets = pull1.buckets;
@@ -427,6 +468,8 @@ async function loadNetStaffingFromAssembled() {
       pageSize,
       opStartMin,
       opEndMin,
+      scheduleId,
+      netMode,
     });
     pullStats = addPullStats(pullStats, pull2.stats);
     buckets = pull2.buckets;
@@ -449,8 +492,17 @@ async function loadNetStaffingFromAssembled() {
         : `site “${siteName}” as site_id + site (auto-retry without site also returned no rows)`;
       emptyNote = `Assembled returned no staffing intervals for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — in Assembled, confirm **net staffing** (scheduled vs required / staffing surplus) exists for this date, channel, and queues; if it’s empty there too, this is missing Assembled data or API scope, not Netlify. Otherwise confirm the API key is a full key for this company (not restricted) and the channel name matches Assembled exactly.`;
     }
-  } else if (assembledOmitSiteAuto) {
-    assembledNoteOk = `Assembled net staffing uses queue + channel only (no site_id); site-scoped API returned no rows.`;
+  } else {
+    const parts = [];
+    if (assembledOmitSiteAuto) {
+      parts.push('Net staffing uses queue + channel only (no site_id); site-scoped API had no rows.');
+    }
+    if (netMode !== 'api' || scheduleId) {
+      parts.push(
+        `Net compute: ${netMode}${scheduleId ? ' · schedule_id set' : ''}. Compare to Staffing timeline with the same filters.`
+      );
+    }
+    if (parts.length) assembledNoteOk = parts.join(' ');
   }
 
   return {
@@ -458,9 +510,11 @@ async function loadNetStaffingFromAssembled() {
     matrix,
     hours,
     source: 'assembled',
-    /** Heatmap shows raw Assembled `staffing_net` units (people-style). */
+    /** Heatmap shows people-style net per interval (see assembled_net_compute). */
     net_staffing_unit: 'people',
     assembled_hour_rollup: rollup,
+    assembled_net_compute: netMode,
+    assembled_schedule_id_set: !!scheduleId,
     assembled_queues_used: queueNames,
     assembled_queues_missing: missingQueueNames.length ? missingQueueNames : undefined,
     assembled_site_filter: envSkipSite ? 'none_env' : assembledOmitSiteAuto ? 'none_auto_retry' : 'site_id',

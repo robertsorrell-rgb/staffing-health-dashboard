@@ -300,7 +300,7 @@ function renderHeatmap(container, payload) {
     const rollup = payload.assembled_hour_rollup === 'sum' ? 'sum' : 'average';
     titleEl.textContent =
       unit === 'people'
-        ? `Net staffing (Assembled — hourly ${rollup} of half-hour nets vs requirement)`
+        ? `Net staffing (Assembled — hourly ${rollup} of 30‑min slots; same queue/channel as Staffing timeline)`
         : 'Net staffing vs target (% deviation — Capacity Pull)';
   }
   const bandFn = heatmapBandClass;
