@@ -179,6 +179,15 @@ body {
   width: 100%;
 }
 
+#panel-targeted-vto-bot .panel-title {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-align: center;
+  display: block;
+  width: 100%;
+}
+
 .idle-split {
   display: flex;
   flex-direction: row;
@@ -608,14 +617,51 @@ a.digest-link {
   margin-top: 14px !important;
 }
 
-/* VTO card: clearly separate Today vs This week */
-.vto-scope-today {
-  padding-bottom: 18px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--border-str);
+/* VTO card: Today vs This week side-by-side (same rhythm as idle split) */
+.vto-split {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 28px;
+  margin-top: 12px;
 }
-.vto-scope-week {
-  margin-top: 20px;
+.vto-split-col {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-left: 18px;
+  border-left: 1px solid var(--border-str);
+}
+.vto-split-col:first-child {
+  padding-left: 0;
+  border-left: none;
+}
+.vto-split .vto-scope-today {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+.vto-split .vto-scope-week {
+  margin-top: 0;
+}
+@media (max-width: 640px) {
+  .vto-split {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 20px;
+    padding-bottom: 6px;
+    margin-right: -4px;
+  }
+  .vto-split-col {
+    flex: 0 0 min(280px, calc(100vw - 72px));
+    min-width: min(280px, calc(100vw - 72px));
+    padding-left: 18px;
+    border-left: 1px solid var(--border-str);
+  }
+  .vto-split-col:first-child {
+    padding-left: 0;
+    border-left: none;
+  }
 }
 .vto-period-title {
   margin: 0 0 12px;

@@ -681,7 +681,9 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       body += `<p class="panel-error">Automated panel fallback: ${escapeHtml(autoPanelErr)}</p>`;
     }
 
-    body += `<section class="vto-scope vto-scope-today" aria-labelledby="vto-head-today">`;
+    body += `<div class="vto-split">`;
+
+    body += `<section class="vto-scope vto-scope-today vto-split-col" aria-labelledby="vto-head-today">`;
     body += `<h3 class="vto-period-title" id="vto-head-today"><span class="vto-period-label">Today</span></h3>`;
     body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursCombined)} h</strong></div>`;
 
@@ -692,7 +694,7 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combined.by_group || []), 'By sales group');
     body += `</section>`;
 
-    body += `<section class="vto-scope vto-scope-week" aria-labelledby="vto-head-week">`;
+    body += `<section class="vto-scope vto-scope-week vto-split-col" aria-labelledby="vto-head-week">`;
     const weekMetaLine = combinedWeek.label
       ? `${combinedWeek.label} · Sun–Sat (CT)`
       : 'Sun–Sat · Central Time';
@@ -705,6 +707,8 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     }
     body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combinedWeek.by_group || []), 'By sales group');
     body += `</section>`;
+
+    body += `</div>`;
   }
 
   return `
