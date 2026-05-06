@@ -174,8 +174,12 @@ node scripts/smoke-endpoints.js      # adherence, targeted-vto, others (needs .e
 |------|----------|
 | `/api/net-staffing` | Net staffing matrix (Assembled when keyed; sheet only if `CAPACITY_PULL_SOURCE=sheet` or no key) |
 | `/api/idle-hourly-log` | Weighted idle % from hourly log |
+| `/api/speed-to-lead` | **Speed-to-lead (minutes)** — avg/median + by sales group. **Primary:** Looker API (`LOOKER_BASE_URL`, `LOOKER_CLIENT_ID`, `LOOKER_CLIENT_SECRET`, and `LOOKER_SPEED_TO_LEAD_QUERY_ID` *or* `LOOKER_SPEED_TO_LEAD_LOOK_ID`). **Fallback:** Google Sheet (`SPEED_TO_LEAD_*` in `deploy-defaults.js`). |
 | `/api/adherence` | Ping counts + digest link |
 | `/api/targeted-vto` | Combined VTO from Offers (COMMITTED) + Requests_Submissions (Approved): today + **Sun–Sat CT week** `combined_week.by_group` |
 | `/api/auto-vto` | Requests_Submissions rows today (raw preview panel) |
 | `/api/bobbot` | **`Bobbot_History`** by **`request_date`** (CT today); hardcoded workbook ID in function; **cancelled** rows omitted |
 | `/api/callout` | Call-out + optional attendance tab |
+| `/api/staffing-chat` | **POST** — AI answers from browser-sent JSON context. **Corporate GPT:** `OPENAI_API_KEY` + `STAFFING_CHAT_MODEL`, or **Azure OpenAI:** `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_KEY` (+ optional `AZURE_OPENAI_API_VERSION`). **Corporate Claude:** `ANTHROPIC_API_KEY` + optional `STAFFING_CHAT_ANTHROPIC_MODEL`. **Gemini (often free):** `GEMINI_API_KEY` from [Google AI Studio](https://aistudio.google.com/apikey). **`STAFFING_CHAT_PROVIDER`:** `auto` (default; order: OpenAI/Azure → Anthropic → Gemini), `openai`, `anthropic`, or `gemini`. |
+
+**Note:** Company “access to ChatGPT / Claude” usually means the **vendor API key** your IT team puts in Netlify — not your personal login to the chat websites. ChatGPT Plus / Claude Pro subscriptions typically **do not** include server API keys.

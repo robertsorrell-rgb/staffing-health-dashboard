@@ -20,6 +20,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/speed-to-lead"
+  to = "/.netlify/functions/speed-to-lead"
+  status = 200
+
+[[redirects]]
   from = "/api/adherence"
   to = "/.netlify/functions/adherence"
   status = 200
@@ -52,6 +57,11 @@
 [[redirects]]
   from = "/api/dashboard-snapshot"
   to = "/.netlify/functions/dashboard-snapshot"
+  status = 200
+
+[[redirects]]
+  from = "/api/staffing-chat"
+  to = "/.netlify/functions/staffing-chat"
   status = 200
 
 [context.production.environment]

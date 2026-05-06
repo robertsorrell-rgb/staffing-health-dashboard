@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staffing Health Dashboard</title>
-  <link rel="stylesheet" href="css/styles.css?v=65" />
+  <link rel="stylesheet" href="css/styles.css?v=68" />
 </head>
 <body>
   <div class="dash-root">
@@ -28,6 +28,32 @@
     <button type="button" class="btn" id="btn-refresh" aria-label="Refresh now">Refresh</button>
   </div>
 
+  <div class="staffing-chat-bar-wrap" id="staffing-chat-bar-wrap" aria-label="Staffing assistant">
+    <form class="staffing-chat-bar-form" id="staffing-chat-form">
+      <span class="staffing-chat-bar-label">Assistant</span>
+      <label class="sr-only" for="staffing-chat-input">Ask the staffing assistant</label>
+      <input
+        type="text"
+        class="staffing-chat-bar-input"
+        id="staffing-chat-input"
+        maxlength="2000"
+        autocomplete="off"
+        placeholder="Ask about staffing using metrics on this page…"
+      />
+      <button type="submit" class="btn staffing-chat-bar-btn" id="btn-staffing-chat-send">Ask</button>
+      <button type="button" class="btn btn-secondary staffing-chat-bar-btn" id="btn-staffing-chat-clear">
+        Clear
+      </button>
+    </form>
+    <div class="staffing-chat-bar-row2">
+      <div class="staffing-chat-suggestions staffing-chat-bar-chips" id="staffing-chat-suggestions" aria-label="Suggested questions"></div>
+      <p class="staffing-chat-status staffing-chat-bar-status" id="staffing-chat-status" hidden role="status"></p>
+    </div>
+    <div class="staffing-chat-bar-log-wrap" id="staffing-chat-log-wrap" hidden>
+      <div class="staffing-chat-log staffing-chat-bar-log" id="staffing-chat-log" aria-live="polite" aria-relevant="additions"></div>
+    </div>
+  </div>
+
   <main class="main-content" role="main">
     <div class="freshness-strip" id="freshness-strip" aria-live="polite">
       <span class="panel-muted">Loading data sources…</span>
@@ -36,7 +62,7 @@
     <!-- Section 1 -->
     <section class="section-block" aria-labelledby="sec1-title">
       <div class="section-header">
-        <h2 class="section-title" id="sec1-title">Net staffing · Idle · Adherence</h2>
+        <h2 class="section-title" id="sec1-title">Net staffing · Idle · Speed to lead · Adherence</h2>
       </div>
 
       <div class="heatmap-card">
@@ -91,6 +117,15 @@
           <div class="panel-error" id="idle-err" hidden></div>
         </div>
       </div>
+
+      <div class="panel-grid panel-grid-fullwidth">
+        <div class="panel-card" id="panel-speed-to-lead">
+          <div class="panel-title">Speed to lead</div>
+          <p class="panel-muted stl-meta-line" id="stl-meta"></p>
+          <div id="stl-body"></div>
+          <div class="panel-error" id="stl-err" hidden></div>
+        </div>
+      </div>
     </section>
 
     <!-- Section 2 -->
@@ -130,9 +165,10 @@
       <p class="panel-error" id="ai-brief-error" hidden role="alert"></p>
       <p class="panel-muted ai-brief-meta" id="ai-brief-meta"></p>
     </section>
+
   </main>
   </div>
 
-  <script type="module" src="js/app.js?v=86"></script>
+  <script type="module" src="js/app.js?v=89"></script>
 </body>
 </html>

@@ -79,6 +79,27 @@ These are **not** wired into Staffing Health by default; they show up in other t
 | CC90s V2.csv | `18RJPIeClVQ6HLQK_7e-KdeqlHqqvLvYoqAkmciG4iJc` | `CC90s V2.csv`, `Historical CC90` |
 | Intraday Leads 4 16.csv | `1clGnZjpQSJOhy65yH6Gx4V33UxyYa_eAHhDu15lrm-k` | `Intraday Leads 4 16.csv`, `Historical Leads` |
 
+---
+
+## Speed to lead (`GET /api/speed-to-lead`)
+
+### Preferred: Looker API
+
+When **`LOOKER_BASE_URL`**, **`LOOKER_CLIENT_ID`**, **`LOOKER_CLIENT_SECRET`**, and either **`LOOKER_SPEED_TO_LEAD_QUERY_ID`** or **`LOOKER_SPEED_TO_LEAD_LOOK_ID`** are set, the function runs that saved **query** or **look** via Looker API **4.0** (`/login`, then `/queries/{id}/run/json` or `/looks/{id}/run/json`). Response JSON is normalized to rows; the same **speed-to-lead** and **sales group** column heuristics apply as below.
+
+- Optional **`LOOKER_API_VERSION`** (default `4.0`).
+- If the result includes a parseable **date** / **timestamp** / **lead_date**-style field, rows are filtered to **today (America/Chicago)** in the function. Otherwise **all returned rows** are used — filter in Looker if you need a narrower window.
+
+### Fallback: Google Sheet
+
+**Spreadsheet ID:** `SPEED_TO_LEAD_SPREADSHEET_ID` — default `1clGnZjpQSJOhy65yH6Gx4V33UxyYa_eAHhDu15lrm-k` (same workbook as **Intraday Leads** in the reference table).
+
+**Tab:** `SPEED_TO_LEAD_TAB` — default `Intraday Leads 4 16.csv`.
+
+**Share:** Grant the dashboard **Google service account** (same as other bots) read access to this workbook.
+
+**Behavior:** Rows whose **date** column matches **today (America/Chicago)** (`readSheetFilterToday`). A **speed-to-lead minutes** column is detected by header text (e.g. contains both **speed** and **lead**, or response-time patterns). Override with **`SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX`** (0-based column index on row 1). Optional rollup column: **Sales group** / **queue**.
+
 **Finding bot workbook IDs:** Open the sheet in Chrome → URL contains `/d/<SPREADSHEET_ID>/`. Alternatively enable **Google Drive API** on the GCP project backing this service account and list spreadsheets (Drive was disabled on `vcpu-dashboard` at last check).
 
 ---

@@ -16,6 +16,10 @@ const DEFAULTS = {
   IDLE_CONSUMER_SPREADSHEET_ID: '1MlHy2dB9JieEk4q72YhsEJLwvFFYJZ_fAI7s4M7mDLk',
   IDLE_CONSUMER_HOURLY_LOG_TAB: 'CS_Hourly_Log',
   IDLE_HOURLY_LOG_CACHE_SECONDS: '180',
+  /** Intraday leads workbook — speed-to-lead minutes by day (share with service account). */
+  SPEED_TO_LEAD_SPREADSHEET_ID: '1clGnZjpQSJOhy65yH6Gx4V33UxyYa_eAHhDu15lrm-k',
+  SPEED_TO_LEAD_TAB: 'Intraday Leads 4 16.csv',
+  SPEED_TO_LEAD_CACHE_SECONDS: '180',
   ADHERENCE_SPREADSHEET_ID: '16OLaJrpyNHzh9Oqd5GV3JdSx0YJeyu8a4qD38WTpcgU',
   ADHERENCE_ALERTS_TAB: 'Adherence_Alert_Log',
   /** Live Floor tab — current OOA rows for dashboard list (Name, Flex State, Adherence). */

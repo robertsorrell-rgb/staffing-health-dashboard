@@ -6,6 +6,7 @@ const { todayCTDateStr } = require('./ct.js');
 const SNAPSHOT_FN_NAMES = [
   'net-staffing',
   'idle-hourly-log',
+  'speed-to-lead',
   'adherence',
   'targeted-vto',
   'auto-vto',

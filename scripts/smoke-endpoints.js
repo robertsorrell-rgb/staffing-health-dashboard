@@ -44,6 +44,8 @@ async function run(name, modPath) {
   if (Array.isArray(body.intraday_ooa_leaders))
     process.stdout.write(` intraday_ooa_leaders=${body.intraday_ooa_leaders.length}`);
   if (body.matrix?.length != null) process.stdout.write(` matrix_groups=${body.matrix.length}`);
+  if (body.summary?.avg_speed_to_lead_minutes != null)
+    process.stdout.write(` stl_avg=${body.summary.avg_speed_to_lead_minutes}`);
   if (body.source) process.stdout.write(` source=${body.source}`);
   if (!ok200 || body.error) process.stdout.write(` error=${body.error || ''}`);
   console.log('');
@@ -59,6 +61,7 @@ async function run(name, modPath) {
   failed = !(await run('bobbot', path.join(root, 'bobbot.js'))) || failed;
   failed = !(await run('ot-fill-rate', path.join(root, 'ot-fill-rate.js'))) || failed;
   failed = !(await run('net-staffing', path.join(root, 'net-staffing.js'))) || failed;
+  failed = !(await run('speed-to-lead', path.join(root, 'speed-to-lead.js'))) || failed;
   process.exit(failed ? 1 : 0);
 })().catch((e) => {
   console.error(e);

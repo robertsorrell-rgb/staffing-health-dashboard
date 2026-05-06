@@ -43,6 +43,7 @@ const FETCH_STAGGER_MS = 220;
 const ENDPOINTS = [
   ['net-staffing', '/api/net-staffing'],
   ['idle-hourly-log', '/api/idle-hourly-log'],
+  ['speed-to-lead', '/api/speed-to-lead'],
   ['adherence', '/api/adherence'],
   ['targeted-vto', '/api/targeted-vto'],
   ['auto-vto', '/api/auto-vto'],
@@ -880,6 +881,16 @@ function formatHoursDisplay(h) {
   return String(n).replace(/\.?0+$/, '');
 }
 
+/** Speed-to-lead (minutes) — trim trailing zeros lightly */
+function formatStlMinutes(m) {
+  if (m === null || m === undefined || m === '') return '—';
+  const num = Number(m);
+  if (Number.isNaN(num)) return '—';
+  const n = Math.round(num * 100) / 100;
+  if (Number.isInteger(n)) return String(n);
+  return String(n).replace(/\.?0+$/, '');
+}
+
 /** Whole hours, always rounded up (VTO approvals card). */
 function formatHoursCeilUp(h) {
   if (h === null || h === undefined || h === '') return '—';
@@ -1444,6 +1455,114 @@ function exceptionPanel(name, data, errMsg, previewPrefs = null) {
 
 let lastDashboardForBrief = null;
 
+let staffingChatMessages = [];
+
+const STAFFING_CHAT_SUGGESTIONS = [
+  'Which sales groups look strongest vs weakest on net staffing right now?',
+  'Summarize idle for the full day and call out the highest groups.',
+  'What do adherence pings and manager alert counts show?',
+  'How much combined VTO was approved today, and which groups drive it?',
+  'What does OT fill look like on the floor today?',
+];
+
+function renderStaffingChatLog() {
+  const log = document.getElementById('staffing-chat-log');
+  const logWrap = document.getElementById('staffing-chat-log-wrap');
+  if (!log) return;
+  if (logWrap) {
+    logWrap.hidden = staffingChatMessages.length === 0;
+  }
+  if (!staffingChatMessages.length) {
+    log.innerHTML = '';
+    return;
+  }
+  log.innerHTML = staffingChatMessages
+    .map((m) => {
+      const cls = m.role === 'user' ? 'staffing-chat-msg-user' : 'staffing-chat-msg-assistant';
+      const lab = m.role === 'user' ? 'You' : 'Assistant';
+      return `<div class="staffing-chat-msg ${cls}"><div class="staffing-chat-msg-role">${lab}</div><div>${escapeHtml(m.content)}</div></div>`;
+    })
+    .join('');
+  log.scrollTop = log.scrollHeight;
+}
+
+function setStaffingChatStatus(text, hidden) {
+  const el = document.getElementById('staffing-chat-status');
+  if (!el) return;
+  el.hidden = !!hidden;
+  el.textContent = hidden ? '' : text;
+}
+
+async function sendStaffingChat(text) {
+  const q = String(text || '').trim();
+  if (!q) return;
+  const payload = buildStaffingAssistantPayload(lastDashboardForBrief);
+  if (!payload) {
+    setStaffingChatStatus('Wait for the dashboard to finish loading, then try again.', false);
+    return;
+  }
+  const form = document.getElementById('staffing-chat-form');
+  const inp = document.getElementById('staffing-chat-input');
+  staffingChatMessages.push({ role: 'user', content: q });
+  renderStaffingChatLog();
+  if (inp) inp.value = '';
+  const controls = form ? form.querySelectorAll('input,button') : [];
+  controls.forEach((el) => {
+    el.disabled = true;
+  });
+  setStaffingChatStatus('Thinking…', false);
+
+  try {
+    const r = await fetch(apiUrl('/api/staffing-chat'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      body: JSON.stringify({ messages: staffingChatMessages, context: payload }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      throw new Error(j.error || `Request failed (${r.status})`);
+    }
+    staffingChatMessages.push({ role: 'assistant', content: j.reply || '—' });
+  } catch (e) {
+    staffingChatMessages.push({
+      role: 'assistant',
+      content: `I couldn’t complete that: ${e.message || String(e)}`,
+    });
+  } finally {
+    controls.forEach((el) => {
+      el.disabled = false;
+    });
+    setStaffingChatStatus('', true);
+    renderStaffingChatLog();
+  }
+}
+
+function initStaffingChatUi() {
+  const form = document.getElementById('staffing-chat-form');
+  const sug = document.getElementById('staffing-chat-suggestions');
+  const clearBtn = document.getElementById('btn-staffing-chat-clear');
+  if (sug) {
+    sug.innerHTML = STAFFING_CHAT_SUGGESTIONS.map(
+      (t) => `<button type="button" class="staffing-chat-chip">${escapeHtml(t)}</button>`
+    ).join('');
+    sug.querySelectorAll('.staffing-chat-chip').forEach((btn, i) => {
+      btn.addEventListener('click', () => sendStaffingChat(STAFFING_CHAT_SUGGESTIONS[i]));
+    });
+  }
+  form?.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    sendStaffingChat(document.getElementById('staffing-chat-input')?.value || '');
+  });
+  clearBtn?.addEventListener('click', () => {
+    staffingChatMessages = [];
+    renderStaffingChatLog();
+    setStaffingChatStatus('', true);
+  });
+  renderStaffingChatLog();
+}
+
 function formatBriefCtHour(h) {
   if (h == null) return '';
   const n = Number(h);
@@ -1534,6 +1653,26 @@ function generateLocalDailyBrief(context, meta) {
         summaryParts.push(`Idle: ${idleBits.join('; ')}.${topTxt}`);
       }
     }
+  }
+
+  const stlCtx = context.speedToLead;
+  if (stlCtx?.error) {
+    summaryParts.push(`Speed to lead did not load (${stlCtx.error}).`);
+  } else if (
+    stlCtx &&
+    (stlCtx.avgMinutes != null || stlCtx.medianMinutes != null || (stlCtx.rowsWithMinutes || 0) > 0)
+  ) {
+    const bits = [];
+    if (stlCtx.avgMinutes != null) bits.push(`avg ${formatStlMinutes(stlCtx.avgMinutes)} min`);
+    if (stlCtx.medianMinutes != null) bits.push(`median ${formatStlMinutes(stlCtx.medianMinutes)} min`);
+    const top = stlCtx.topGroups || [];
+    const gt = top.length
+      ? ` Top groups by volume: ${top.map((g) => `${g.group} (${formatStlMinutes(g.avgMin)} min avg, n=${g.rows})`).join('; ')}.`
+      : '';
+    const col = stlCtx.column ? ` (${stlCtx.column})` : '';
+    summaryParts.push(`Speed to lead today${col}: ${bits.join(', ')}.${gt}`);
+  } else if (stlCtx?.note) {
+    summaryParts.push(`Speed to lead: ${stlCtx.note}`);
   }
 
   const ad = context.adherence;
@@ -1763,6 +1902,7 @@ function buildDashboardBriefContext(results, errors) {
     apiErrors: { ...errors },
     netStaffing: null,
     idle: null,
+    speedToLead: null,
     adherence: null,
     vtoPtoCalloutOt: {},
   };
@@ -1824,6 +1964,25 @@ function buildDashboardBriefContext(results, errors) {
       kpiHour: idle.kpi_hour ?? idle.ct_current_hour ?? null,
       topGroupsByDay: topGroupsByDay.map(([g, pct]) => ({ group: g, pct })),
     };
+  }
+
+  const stl = results['speed-to-lead'];
+  if (errors['speed-to-lead']) ctx.speedToLead = { error: errors['speed-to-lead'] };
+  else if (stl && typeof stl === 'object') {
+    ctx.speedToLead = {
+      source: stl.source || null,
+      avgMinutes: stl.summary?.avg_speed_to_lead_minutes ?? null,
+      medianMinutes: stl.summary?.median_speed_to_lead_minutes ?? null,
+      rowsWithMinutes: stl.summary?.rows_with_valid_minutes ?? null,
+      rowsToday: stl.summary?.rows_today ?? null,
+      column: stl.speed_column_used || null,
+      topGroups: (stl.by_sales_group || []).slice(0, 6).map((g) => ({
+        group: g.group,
+        avgMin: g.avg_speed_to_lead_minutes,
+        rows: g.rows,
+      })),
+    };
+    if (stl.note) ctx.speedToLead.note = String(stl.note).slice(0, 220);
   }
 
   const adh = results['adherence'];
@@ -1913,6 +2072,38 @@ function buildDashboardBriefContext(results, errors) {
   }
 
   return ctx;
+}
+
+/** Compact snapshot for POST /api/staffing-chat (OpenAI reads meta + metrics only). */
+function buildStaffingAssistantPayload(bundle) {
+  if (!bundle?.results) return null;
+  const metrics = buildDashboardBriefContext(bundle.results, bundle.errors || {});
+  const bb = bundle.results.bobbot;
+  if (bb && typeof bb === 'object' && !bundle.errors?.bobbot) {
+    const pa = bb.pto_week_approved;
+    const pd = bb.pto_week_denied;
+    if (pa || pd) {
+      metrics.vtoPtoCalloutOt.ptoThisWeekSunSatCt = {
+        approvedTotalHours: pa?.total_hours ?? null,
+        deniedTotalHours: pd?.total_hours ?? null,
+        approvedRowsMatched: pa?.rows_matched ?? null,
+        deniedRowsMatched: pd?.rows_matched ?? null,
+        approvedByGroup: (pa?.by_group || []).slice(0, 16),
+        deniedByGroup: (pd?.by_group || []).slice(0, 16),
+        weekLabel: pa?.label || pd?.label || null,
+      };
+    }
+  }
+  return {
+    meta: {
+      viewDate: bundle.meta?.dateStr || null,
+      historical: !!bundle.meta?.historical,
+      capturedAt: bundle.meta?.capturedAt || null,
+      timezoneNote:
+        'Calendar dates and “today” in sheet APIs use America/Chicago unless an error message says otherwise.',
+    },
+    metrics,
+  };
 }
 
 function renderBriefParagraphs(container, text) {
@@ -2007,6 +2198,76 @@ async function fetchLiveDashboard() {
   return { results, errors };
 }
 
+function renderSpeedToLeadPanel(data, errMsg) {
+  const meta = document.getElementById('stl-meta');
+  const body = document.getElementById('stl-body');
+  const errEl = document.getElementById('stl-err');
+  if (!meta || !body || !errEl) return;
+
+  if (errMsg) {
+    errEl.hidden = false;
+    errEl.textContent = errMsg;
+    meta.textContent = '';
+    body.innerHTML = '';
+    return;
+  }
+  errEl.hidden = true;
+
+  if (!data && !errMsg) {
+    meta.textContent = 'Speed to lead was not loaded for this view (retry refresh or pick today).';
+    body.innerHTML = '';
+    return;
+  }
+
+  if (!data || data.configured === false) {
+    meta.textContent = data?.note || 'Speed to lead source not configured.';
+    body.innerHTML = '';
+    return;
+  }
+
+  const sum = data.summary || {};
+  const src =
+    data.source === 'looker'
+      ? 'Looker'
+      : data.source === 'sheet'
+        ? 'Sheet'
+        : data.source
+          ? String(data.source)
+          : '';
+  const srcBit = src ? ` · ${src}` : '';
+  const col = data.speed_column_used ? ` · ${data.speed_column_used}` : '';
+  meta.textContent = `Today (CT): ${sum.rows_with_valid_minutes ?? 0} leads with minutes / ${sum.rows_today ?? 0} rows${col}${srcBit}.`;
+
+  const note = data.note
+    ? `<p class="panel-muted" style="margin-top:8px;line-height:1.4;">${escapeHtml(data.note)}</p>`
+    : '';
+
+  const avg = sum.avg_speed_to_lead_minutes;
+  const med = sum.median_speed_to_lead_minutes;
+  const kpi = `<div class="stl-kpi-row">
+    <div class="stl-kpi"><span class="stl-kpi-label">Average</span><strong>${avg != null ? `${formatStlMinutes(avg)} min` : '—'}</strong></div>
+    <div class="stl-kpi"><span class="stl-kpi-label">Median</span><strong>${med != null ? `${formatStlMinutes(med)} min` : '—'}</strong></div>
+  </div>`;
+
+  const groups = data.by_sales_group || [];
+  let table = '';
+  if (groups.length) {
+    const rows = groups
+      .slice(0, 14)
+      .map(
+        (g) =>
+          `<tr><td>${escapeHtml(String(g.group))}</td><td class="num">${g.rows}</td><td class="num">${g.avg_speed_to_lead_minutes != null ? `${formatStlMinutes(g.avg_speed_to_lead_minutes)} min` : '—'}</td></tr>`
+      )
+      .join('');
+    table = `<div class="preview-table-wrap" style="margin-top:14px;"><table class="preview-table"><thead><tr><th>Sales group</th><th class="num">Leads</th><th class="num">Avg STL</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  } else if ((sum.rows_with_valid_minutes || 0) === 0 && (sum.rows_today || 0) > 0) {
+    table =
+      '<p class="panel-muted" style="margin-top:12px;">No numeric speed-to-lead values parsed for today — check column detection or set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX.</p>';
+  }
+
+  body.innerHTML = note + kpi + table;
+}
+
 function applyDashboardData(results, errors) {
   const nsPayload = results['net-staffing'] || {
     ok: false,
@@ -2072,6 +2333,8 @@ function applyDashboardData(results, errors) {
       } else idleDayGroups.innerHTML = '';
     }
   }
+
+  renderSpeedToLeadPanel(results['speed-to-lead'], errors['speed-to-lead']);
 
   const adh = results['adherence'];
   const adhErr = document.getElementById('adh-err');
@@ -2321,6 +2584,7 @@ document.getElementById('btn-ai-brief-refresh')?.addEventListener('click', () =>
 async function bootDashboard() {
   await resolveLocalRemoteApiOrigin();
   initDashboardDatePicker();
+  initStaffingChatUi();
   await loadDashboard();
 }
 
