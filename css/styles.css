@@ -168,6 +168,53 @@ body {
   grid-template-columns: 1fr;
 }
 
+.idle-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 12px;
+  align-items: start;
+}
+@media (max-width: 800px) {
+  .idle-split {
+    grid-template-columns: 1fr;
+  }
+  .idle-split-col {
+    padding-left: 0;
+    border-left: none;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-str);
+  }
+  .idle-split-col:first-child {
+    padding-top: 0;
+    border-top: none;
+  }
+}
+.idle-split-col {
+  min-width: 0;
+  padding-left: 14px;
+  border-left: 1px solid var(--border-str);
+}
+.idle-split-col:first-child {
+  padding-left: 0;
+  border-left: none;
+}
+.idle-split-heading {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--navy);
+  margin-bottom: 6px;
+}
+.idle-split-kpi {
+  font-size: clamp(22px, 4vw, 32px);
+}
+.idle-parse-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
 /**
  * Exceptions: VTO uses ~half the row (column 1); Bobbot + call-out stack in column 2.
  * Tables use minmax(0,…) so wide grids scroll inside the card instead of blowing out layout.

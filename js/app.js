@@ -519,34 +519,82 @@ async function loadAll() {
   });
 
   const idle = results['idle-hourly-log'];
-  const idleKpi = document.getElementById('idle-kpi');
-  const idleSub = document.getElementById('idle-sub');
+  const idleHourKpi = document.getElementById('idle-hour-kpi');
+  const idleHourSub = document.getElementById('idle-hour-sub');
+  const idleHourGroups = document.getElementById('idle-hour-groups');
+  const idleDayKpi = document.getElementById('idle-day-kpi');
+  const idleDaySub = document.getElementById('idle-day-sub');
+  const idleDayGroups = document.getElementById('idle-day-groups');
+  const idleSplit = document.getElementById('idle-split');
+  const idleParseNote = document.getElementById('idle-parse-note');
   const idleErr = document.getElementById('idle-err');
-  const idleGroups = document.getElementById('idle-groups');
+
+  function idleGroupListHtml(entries, heading) {
+    if (!entries.length) return '';
+    return (
+      `<div class="panel-sub" style="margin-top:10px;">${escapeHtml(heading)}</div>` +
+      `<ul style="margin:8px 0 0 16px;font-size:12px;">${entries.map(([g, p]) => `<li>${escapeHtml(g)}: ${p != null ? p + '%' : '—'}</li>`).join('')}</ul>`
+    );
+  }
+
   if (errors['idle-hourly-log']) {
     idleErr.hidden = false;
     idleErr.textContent = errors['idle-hourly-log'];
-    idleKpi.textContent = '—';
+    idleParseNote.hidden = true;
+    idleSplit.hidden = false;
+    idleHourKpi.textContent = '—';
+    idleHourSub.innerHTML = '';
+    idleHourGroups.innerHTML = '';
+    idleDayKpi.textContent = '—';
+    idleDaySub.innerHTML = '';
+    idleDayGroups.innerHTML = '';
   } else {
     idleErr.hidden = true;
-    const v =
-      idle?.day_floor_idle_pct != null ? idle.day_floor_idle_pct : idle?.current_hour_floor_idle;
-    idleKpi.textContent = v != null ? `${v}%` : '—';
-    if (idle?.note) {
-      idleSub.innerHTML = `<span class="panel-muted">${escapeHtml(idle.note)}</span>`;
-    } else {
-      const parts = [`Date ${idle?.date || '—'} (CT)`, 'Full day weighted'];
-      if (idle?.idle_source_tab) parts.push(`tab ${idle.idle_source_tab}`);
-      idleSub.innerHTML = `<span>${escapeHtml(parts.join(' · '))}</span>`;
-    }
     renderSparkline(document.getElementById('idle-spark'), idle?.sparkline_hours || []);
-    const gd = idle?.groups_by_day;
-    if (gd && Object.keys(gd).length) {
-      const entries = Object.entries(gd).sort((a, b) => (b[1] || 0) - (a[1] || 0));
-      idleGroups.innerHTML =
-        `<div class="panel-sub" style="margin-top:10px;">By group (full day)</div>` +
-        `<ul style="margin:8px 0 0 16px;font-size:12px;">${entries.map(([g, p]) => `<li>${escapeHtml(g)}: ${p != null ? p + '%' : '—'}</li>`).join('')}</ul>`;
-    } else idleGroups.innerHTML = '';
+
+    if (idle?.note) {
+      idleParseNote.hidden = false;
+      idleParseNote.textContent = idle.note;
+      idleSplit.hidden = true;
+    } else {
+      idleParseNote.hidden = true;
+      idleSplit.hidden = false;
+
+      const hv = idle?.current_hour_floor_idle;
+      idleHourKpi.textContent = hv != null ? `${hv}%` : '—';
+      const hourParts = [`Date ${idle?.date || '—'} (CT)`];
+      if (idle?.ct_current_hour != null) hourParts.push(`now ${idle.ct_current_hour}:00`);
+      if (
+        idle?.kpi_hour != null &&
+        idle?.ct_current_hour != null &&
+        idle.kpi_hour !== idle.ct_current_hour
+      ) {
+        hourParts.push(`KPI hour ${idle.kpi_hour}:00`);
+      }
+      if (idle?.idle_source_tab) hourParts.push(`tab ${idle.idle_source_tab}`);
+      idleHourSub.innerHTML =
+        `<span>${escapeHtml(hourParts.join(' · '))}</span>` +
+        (idle?.kpi_note ? `<br/><span class="panel-muted">${escapeHtml(idle.kpi_note)}</span>` : '');
+
+      const gh = idle?.groups_by_hour;
+      const ch = idle?.kpi_hour ?? idle?.ct_current_hour;
+      if (gh && ch != null && gh[String(ch)]) {
+        const entries = Object.entries(gh[String(ch)]).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+        idleHourGroups.innerHTML = idleGroupListHtml(entries, 'By group (this hour)');
+      } else idleHourGroups.innerHTML = '';
+
+      const dv = idle?.day_floor_idle_pct;
+      idleDayKpi.textContent = dv != null ? `${dv}%` : '—';
+      const dayParts = [`Date ${idle?.date || '—'} (CT)`, 'ΣAvail ÷ Σ(Avail + On Call) for the day'];
+      if (idle?.idle_source_tab) dayParts.push(`tab ${idle.idle_source_tab}`);
+      idleDaySub.innerHTML = `<span>${escapeHtml(dayParts.join(' · '))}</span>`;
+
+      const gd = idle?.groups_by_day;
+      if (gd && Object.keys(gd).length) {
+        const entries = Object.entries(gd).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+        idleDayGroups.innerHTML = idleGroupListHtml(entries, 'By group (full day)');
+      } else idleDayGroups.innerHTML = '';
+    }
   }
 
   const adh = results['adherence'];

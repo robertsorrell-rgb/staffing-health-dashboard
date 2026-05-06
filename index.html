@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staffing Health Dashboard</title>
-  <link rel="stylesheet" href="css/styles.css?v=20" />
+  <link rel="stylesheet" href="css/styles.css?v=21" />
 </head>
 <body>
   <header class="app-header" role="banner">
@@ -62,11 +62,23 @@
       <div class="panel-grid panel-grid-fullwidth">
         <div class="panel-card" id="panel-idle">
           <div class="panel-title">Idle time (CS_Hourly_Log)</div>
-          <div class="panel-muted">Weighted floor ΣAvail ÷ Σ(Avail + On Call) · full day (CT)</div>
-          <div class="panel-kpi" id="idle-kpi">—</div>
-          <div class="panel-sub" id="idle-sub"></div>
+          <div class="panel-muted">Weighted floor ΣAvail ÷ Σ(Avail + On Call) · Central Time</div>
           <div id="idle-spark" class="sparkline-wrap"></div>
-          <div id="idle-groups"></div>
+          <p class="panel-muted idle-parse-note" id="idle-parse-note" hidden></p>
+          <div class="idle-split" id="idle-split">
+            <div class="idle-split-col">
+              <div class="idle-split-heading">Current hour</div>
+              <div class="panel-kpi idle-split-kpi" id="idle-hour-kpi">—</div>
+              <div class="panel-sub" id="idle-hour-sub"></div>
+              <div id="idle-hour-groups"></div>
+            </div>
+            <div class="idle-split-col">
+              <div class="idle-split-heading">Full day</div>
+              <div class="panel-kpi idle-split-kpi" id="idle-day-kpi">—</div>
+              <div class="panel-sub" id="idle-day-sub"></div>
+              <div id="idle-day-groups"></div>
+            </div>
+          </div>
           <div class="panel-error" id="idle-err" hidden></div>
         </div>
       </div>
@@ -81,6 +93,6 @@
     </section>
   </main>
 
-  <script type="module" src="js/app.js?v=22"></script>
+  <script type="module" src="js/app.js?v=23"></script>
 </body>
 </html>
