@@ -173,5 +173,5 @@ node scripts/smoke-endpoints.js      # adherence, targeted-vto, others (needs .e
 | `/api/adherence` | Ping counts + digest link |
 | `/api/targeted-vto` | Combined VTO from Offers (COMMITTED) + Requests_Submissions (Approved): today + **Sun–Sat CT week** `combined_week.by_group` |
 | `/api/auto-vto` | Requests_Submissions rows today (raw preview panel) |
-| `/api/bobbot` | Bobbot rows today |
+| `/api/bobbot` | PTO rows **today (CT)** from **`Bobbot_History`** (`BOBBOT_TAB`; defaults there if unset) |
 | `/api/callout` | Call-out + optional attendance tab |
