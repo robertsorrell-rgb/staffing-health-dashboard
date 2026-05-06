@@ -245,6 +245,7 @@ function emptyPullStats() {
     droppedOutsideRequestRange: 0,
     droppedOutsideOpWindow: 0,
     droppedBadNet: 0,
+    droppedWrongDay: 0,
   };
 }
 
@@ -256,7 +257,37 @@ function addPullStats(a, b) {
     droppedOutsideRequestRange: a.droppedOutsideRequestRange + b.droppedOutsideRequestRange,
     droppedOutsideOpWindow: a.droppedOutsideOpWindow + b.droppedOutsideOpWindow,
     droppedBadNet: a.droppedBadNet + b.droppedBadNet,
+    droppedWrongDay: a.droppedWrongDay + b.droppedWrongDay,
   };
+}
+
+/** yyyy-MM-dd for instant in America/Chicago */
+function wallDateIsoChicago(sec) {
+  return new Date(sec * 1000).toLocaleDateString('en-CA', { timeZone: TZ });
+}
+
+/** Minute-of-day 0–1439 in Chicago */
+function minuteOfDayChicago(sec) {
+  const { hr, minute } = hourFromUnix(sec);
+  return hr * 60 + minute;
+}
+
+/**
+ * Index of this interval’s start from Chicago midnight: 0 = 00:00–00:30, 1 = 00:30–01:00, …
+ * Dedupes pagination quirks (duplicate Unix starts for the same slot).
+ */
+function slotIndexFromUnix(sec, intervalSec) {
+  const intervalMin = intervalSec / 60;
+  if (!Number.isFinite(intervalMin) || intervalMin <= 0) return null;
+  const mod = minuteOfDayChicago(sec);
+  return Math.floor(mod / intervalMin);
+}
+
+/** Clock hour 0–23 containing this slot (used to average all slots in the hour, usually 2 when interval=1800). */
+function hourFromSlotIndex(slotIdx, intervalSec) {
+  const intervalMin = intervalSec / 60;
+  const minutesFromMidnight = slotIdx * intervalMin;
+  return Math.floor(minutesFromMidnight / 60);
 }
 
 function parsePositiveInt(name, fallback) {
@@ -348,6 +379,7 @@ async function pullForecastBuckets({
   opEndMin,
   scheduleId,
   netMode,
+  dateIso,
 }) {
   const buckets = {};
   for (const q of capMap) buckets[q.label] = {};
@@ -357,7 +389,7 @@ async function pullForecastBuckets({
     const queueId = queueIdMap[qDef.queue];
     if (!queueId) continue;
 
-    /** Dedupe by interval start (seconds); pagination/overlap last write wins */
+    /** One net per Chicago slot index (dedupes duplicate API rows for the same half-hour). */
     const slotNets = new Map();
 
     let offset = 0;
@@ -401,10 +433,20 @@ async function pullForecastBuckets({
           continue;
         }
 
-        const { hr, minute } = hourFromUnix(startUnix);
-        const slotMinute = hr * 60 + minute;
+        if (wallDateIsoChicago(startUnix) !== dateIso) {
+          stats.droppedWrongDay += 1;
+          continue;
+        }
+
+        const slotMinute = minuteOfDayChicago(startUnix);
         if (slotMinute < opStartMin || slotMinute >= opEndMin) {
           stats.droppedOutsideOpWindow += 1;
+          continue;
+        }
+
+        const slotIdx = slotIndexFromUnix(startUnix, intervalSec);
+        if (slotIdx == null || slotIdx < 0) {
+          stats.droppedBadStart += 1;
           continue;
         }
 
@@ -414,7 +456,7 @@ async function pullForecastBuckets({
           continue;
         }
 
-        slotNets.set(startUnix, net);
+        slotNets.set(slotIdx, net);
       }
       if (intervals.length < pageSize) keepGoing = false;
       else offset += pageSize;
@@ -422,8 +464,9 @@ async function pullForecastBuckets({
     }
 
     stats.acceptedRows += slotNets.size;
-    for (const [startUnix, net] of slotNets) {
-      const { hr } = hourFromUnix(startUnix);
+    for (const [slotIdx, net] of slotNets) {
+      const hr = hourFromSlotIndex(slotIdx, intervalSec);
+      if (hr < 0 || hr > 23) continue;
       const b = buckets[qDef.label];
       if (!b[hr]) b[hr] = { sum: 0, n: 0 };
       b[hr].sum += net;
@@ -548,6 +591,7 @@ async function loadNetStaffingFromAssembled() {
     opEndMin,
     scheduleId,
     netMode,
+    dateIso,
   });
   pullStats = addPullStats(pullStats, pull1.stats);
   let buckets = pull1.buckets;
@@ -580,6 +624,7 @@ async function loadNetStaffingFromAssembled() {
       opEndMin,
       scheduleId,
       netMode,
+      dateIso,
     });
     pullStats = addPullStats(pullStats, pull2.stats);
     buckets = pull2.buckets;
@@ -595,7 +640,7 @@ async function loadNetStaffingFromAssembled() {
         ', '
       )}. Names must match Assembled (see CAP_QUEUE_MAP / ASSEMBLED_NET_STAFFING_QUEUES). Site “${siteName}”, channel “${channel}”.`;
     } else if (pullStats.apiRows > 0 && pullStats.acceptedRows === 0) {
-      emptyNote = `Assembled returned ${pullStats.apiRows} staffing intervals for channel “${channel}” but none counted for ${dateIso} CT (outside API Unix window: ${pullStats.droppedOutsideRequestRange}, outside op minutes ${opStartMin}–${opEndMin}: ${pullStats.droppedOutsideOpWindow}, unusable net: ${pullStats.droppedBadNet}, bad timestamps: ${pullStats.droppedBadStart}). Adjust ASSEMBLED_OP_* or interval alignment.`;
+      emptyNote = `Assembled returned ${pullStats.apiRows} staffing intervals for channel “${channel}” but none counted for ${dateIso} CT (outside API Unix window: ${pullStats.droppedOutsideRequestRange}, wrong CT date: ${pullStats.droppedWrongDay}, outside op minutes ${opStartMin}–${opEndMin}: ${pullStats.droppedOutsideOpWindow}, unusable net: ${pullStats.droppedBadNet}, bad timestamps: ${pullStats.droppedBadStart}). Adjust ASSEMBLED_OP_* or interval alignment.`;
     } else {
       const siteHint = envSkipSite
         ? 'site filter off (ASSEMBLED_SKIP_SITE_FILTER)'
@@ -613,14 +658,26 @@ async function loadNetStaffingFromAssembled() {
     }
     if (scheduleId) {
       parts.push('schedule_id filter active — match the same schedule in Staffing timeline.');
+    } else {
+      parts.push(
+        'No ASSEMBLED_SCHEDULE_ID — if Staffing timeline uses “Default Schedule”, add that schedule’s UUID or hourly nets may not match.'
+      );
     }
+    const slotsPerHour = 3600 / intervalSec;
+    const rollupLab =
+      rollup === 'sum'
+        ? `sum of ${Math.round(slotsPerHour)} interval(s) in that clock hour`
+        : `average of ${Math.round(slotsPerHour)} interval(s) (${intervalSec}s each) in that clock hour`;
+    parts.push(
+      `Each queue hourly cell = ${rollupLab}. Aggregate = sum of the five queue hourly cells.`
+    );
     if (netMode === 'api') {
       parts.push(
-        'Net = staffing_net when present, else scheduled − staffing_required.forecasted (Targeted VTO bot). Aggregate row sums the five queue nets — not “scheduled + required”.'
+        'Net per 30‑min interval: staffing_net when present, else scheduled − staffing_required.forecasted (Targeted VTO bot).'
       );
     } else {
       parts.push(
-        `Net compute: ${netMode}. For bot/timeline parity with staffing_net / forecasted requirement, use ASSEMBLED_NET_COMPUTE=api (or vto_bot).`
+        `Net per interval: ${netMode}. For bot parity use ASSEMBLED_NET_COMPUTE=api.`
       );
     }
     assembledNoteOk = parts.join(' ');
