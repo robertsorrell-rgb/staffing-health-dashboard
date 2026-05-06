@@ -54,9 +54,8 @@ function activeCapQueueMap() {
 }
 
 /**
- * yyyy-MM-dd in America/Chicago. Uses formatToParts (not toLocaleDateString) so Linux/Netlify ICU
- * matches macOS — some runtimes return M/D/YYYY for en-CA, which breaks chicagoMidnightUtcMs and
- * causes every interval to fail the "wrong CT date" check.
+ * yyyy-MM-dd in America/Chicago. Uses formatToParts with numeric month/day so Linux/Netlify ICU
+ * agrees with macOS for `chicagoMidnightUtcMs` / `todayIsoCt` (toLocaleDateString can vary).
  */
 function isoDateChicagoFromMs(ms) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -263,7 +262,6 @@ function emptyPullStats() {
     droppedOutsideRequestRange: 0,
     droppedOutsideOpWindow: 0,
     droppedBadNet: 0,
-    droppedWrongDay: 0,
   };
 }
 
@@ -275,13 +273,7 @@ function addPullStats(a, b) {
     droppedOutsideRequestRange: a.droppedOutsideRequestRange + b.droppedOutsideRequestRange,
     droppedOutsideOpWindow: a.droppedOutsideOpWindow + b.droppedOutsideOpWindow,
     droppedBadNet: a.droppedBadNet + b.droppedBadNet,
-    droppedWrongDay: a.droppedWrongDay + b.droppedWrongDay,
   };
-}
-
-/** yyyy-MM-dd for instant in America/Chicago */
-function wallDateIsoChicago(sec) {
-  return isoDateChicagoFromMs(sec * 1000);
 }
 
 /** Minute-of-day 0–1439 in Chicago */
@@ -397,7 +389,6 @@ async function pullForecastBuckets({
   opEndMin,
   scheduleId,
   netMode,
-  dateIso,
 }) {
   const buckets = {};
   for (const q of capMap) buckets[q.label] = {};
@@ -445,14 +436,13 @@ async function pullForecastBuckets({
           stats.droppedBadStart += 1;
           continue;
         }
-        /** Trust the API query window (Unix); CT date-string checks rejected valid rows on some runtimes. */
+        /**
+         * Unix window [startSec, endSec) is built from Chicago midnight + op hours for `dateIso` in the caller.
+         * Do not re-filter by calendar date string — serverless ICU/timezone edge cases can mismatch
+         * `toLocaleDateString` / formatToParts vs the API and drop every row (wrong CT date: N).
+         */
         if (startUnix < startSec || startUnix >= endSec) {
           stats.droppedOutsideRequestRange += 1;
-          continue;
-        }
-
-        if (wallDateIsoChicago(startUnix) !== dateIso) {
-          stats.droppedWrongDay += 1;
           continue;
         }
 
@@ -609,7 +599,6 @@ async function loadNetStaffingFromAssembled() {
     opEndMin,
     scheduleId,
     netMode,
-    dateIso,
   });
   pullStats = addPullStats(pullStats, pull1.stats);
   let buckets = pull1.buckets;
@@ -642,7 +631,6 @@ async function loadNetStaffingFromAssembled() {
       opEndMin,
       scheduleId,
       netMode,
-      dateIso,
     });
     pullStats = addPullStats(pullStats, pull2.stats);
     buckets = pull2.buckets;
@@ -658,7 +646,7 @@ async function loadNetStaffingFromAssembled() {
         ', '
       )}. Names must match Assembled (see CAP_QUEUE_MAP / ASSEMBLED_NET_STAFFING_QUEUES). Site “${siteName}”, channel “${channel}”.`;
     } else if (pullStats.apiRows > 0 && pullStats.acceptedRows === 0) {
-      emptyNote = `Assembled returned ${pullStats.apiRows} staffing intervals for channel “${channel}” but none counted for ${dateIso} CT (outside API Unix window: ${pullStats.droppedOutsideRequestRange}, wrong CT date: ${pullStats.droppedWrongDay}, outside op minutes ${opStartMin}–${opEndMin}: ${pullStats.droppedOutsideOpWindow}, unusable net: ${pullStats.droppedBadNet}, bad timestamps: ${pullStats.droppedBadStart}). Adjust ASSEMBLED_OP_* or interval alignment.`;
+      emptyNote = `Assembled returned ${pullStats.apiRows} staffing intervals for channel “${channel}” but none counted for ${dateIso} CT (outside API Unix window: ${pullStats.droppedOutsideRequestRange}, outside op minutes ${opStartMin}–${opEndMin}: ${pullStats.droppedOutsideOpWindow}, unusable net: ${pullStats.droppedBadNet}, bad timestamps: ${pullStats.droppedBadStart}). Adjust ASSEMBLED_OP_* or interval alignment.`;
     } else {
       const siteHint = envSkipSite
         ? 'site filter off (ASSEMBLED_SKIP_SITE_FILTER)'
