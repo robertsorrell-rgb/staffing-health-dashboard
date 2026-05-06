@@ -1157,7 +1157,7 @@ a.digest-link {
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 28px;
   margin-top: 12px;
 }
@@ -1182,6 +1182,46 @@ a.digest-link {
 .vto-split .vto-scope-yesterday {
   margin-top: 0;
 }
+
+/* VTO approvals card: align headers, pills, and tables across columns */
+#panel-targeted-vto-bot .vto-split > .vto-scope {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+#panel-targeted-vto-bot .vto-period-title {
+  flex: 0 0 auto;
+  min-height: 46px;
+  margin: 0 0 10px;
+  padding: 0;
+}
+#panel-targeted-vto-bot .vto-period-meta {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+  max-height: 2.7em;
+}
+#panel-targeted-vto-bot .panel-error {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+#panel-targeted-vto-bot .rollup-total {
+  margin-top: 0;
+  margin-bottom: 12px;
+  flex: 0 0 auto;
+}
+#panel-targeted-vto-bot .rollup-table-caption {
+  margin-top: 0;
+  margin-bottom: 6px;
+}
+#panel-targeted-vto-bot .vto-rollup-missing-foot {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
 @media (max-width: 640px) {
   .vto-split {
     overflow-x: auto;

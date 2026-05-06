@@ -983,23 +983,24 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     body += `</section>`;
 
     body += `<section class="vto-scope vto-scope-today vto-split-col" aria-labelledby="vto-head-today">`;
-    body += `<h3 class="vto-period-title" id="vto-head-today"><span class="vto-period-label">Today</span></h3>`;
+    const tDay = data.today || sum.today || '';
+    const tMetaLine = tDay ? `${fmtOtWarnDayCt(tDay)} · CT` : 'Central Time';
+    body += `<h3 class="vto-period-title" id="vto-head-today"><span class="vto-period-label">Today</span><span class="vto-period-meta">${escapeHtml(tMetaLine)}</span></h3>`;
     body += `<div class="rollup-total"><span class="rollup-total-label">Approved VTO hours</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursCombined)} h</strong></div>`;
 
-    if (typeof rollup.rows_missing_hours === 'number' && rollup.rows_missing_hours > 0) {
-      body += `<p class="panel-muted rollup-missing">${rollup.rows_missing_hours} COMMITTED offer row(s) missing hour value.</p>`;
-    }
-
     body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combined.by_group || []), 'By sales group');
+    if (typeof rollup.rows_missing_hours === 'number' && rollup.rows_missing_hours > 0) {
+      body += `<p class="panel-muted rollup-missing vto-rollup-missing-foot">${rollup.rows_missing_hours} COMMITTED offer row(s) missing hour value.</p>`;
+    }
     body += `</section>`;
 
     body += `<section class="vto-scope vto-scope-week vto-split-col" aria-labelledby="vto-head-week">`;
     const weekMetaLine =
       combinedWeek.week_start && combinedWeek.week_end
-        ? `${fmtOtWarnDayCt(combinedWeek.week_start)} – ${fmtOtWarnDayCt(combinedWeek.week_end)} · Sun–Sat (CT)`
+        ? `${fmtOtWarnDayCt(combinedWeek.week_start)} – ${fmtOtWarnDayCt(combinedWeek.week_end)} · Sun–Sat · CT`
         : combinedWeek.label
-          ? `${combinedWeek.label} · Sun–Sat (CT)`
-          : 'Sun–Sat · Central Time';
+          ? `${combinedWeek.label}`
+          : 'Sun–Sat · CT';
     body += `<h3 class="vto-period-title" id="vto-head-week"><span class="vto-period-label">This week</span><span class="vto-period-meta">${escapeHtml(weekMetaLine)}</span></h3>`;
     if (combinedWeek.targeted_fetch_error) {
       body += `<p class="panel-error">Offers tab (week): ${escapeHtml(combinedWeek.targeted_fetch_error)}</p>`;
