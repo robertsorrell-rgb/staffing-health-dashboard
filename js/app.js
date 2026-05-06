@@ -739,11 +739,19 @@ function exceptionPanel(name, data, errMsg, previewPrefs = null) {
     data.configured !== false && !errMsg && !hasPreviewRows && !data.today_hint
       ? `<p class="panel-muted" style="margin-top:8px;">No sheet rows for today (CT) in this preview.</p>`
       : '';
+  const srcNote = data.sheet_source_note
+    ? `<p class="panel-muted" style="margin-top:6px;font-size:11px;line-height:1.4;">${escapeHtml(data.sheet_source_note)}</p>`
+    : '';
+  const cfgHint = data.configuration_hint
+    ? `<p class="panel-muted" style="margin-top:6px;font-size:11px;color:var(--amber);font-weight:600;">${escapeHtml(data.configuration_hint)}</p>`
+    : '';
   return `
     <div class="panel-card panel-exception" id="panel-${id}">
       <div class="panel-title">${name}</div>
       ${errMsg ? `<p class="panel-error">${escapeHtml(errMsg)}</p>` : ''}
       <div class="panel-sub">Today: <strong>${n}</strong></div>
+      ${srcNote}
+      ${cfgHint}
       ${hint}
       ${data.configured === false && !errMsg ? `<p class="panel-muted">${data.note || 'Not configured'}</p>` : ''}
       ${emptyToday}

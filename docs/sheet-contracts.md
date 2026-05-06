@@ -245,6 +245,8 @@ Datetime serials must yield the calendar date in **America/Chicago** (not UTC mi
 
 **Tab:** `Bobbot_History` (`BOBBOT_TAB`)
 
+**Dashboard:** `GET /api/bobbot` reads this tab only. If Netlify **`BOBBOT_TAB`** is set to another sheet (e.g. `Gmail_Import`), the Bobbot (PTO) card will show the wrong rows — leave unset or set exactly `Bobbot_History`. The API returns **`sheet_source_note`** (tab + date column used) so you can confirm in the UI.
+
 ### Header row (row 1) — verified 2026-05-05
 
 | Col | Letter | Header cell text |

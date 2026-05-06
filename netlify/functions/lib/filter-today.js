@@ -29,13 +29,16 @@ async function readSheetFilterToday(spreadsheetId, tab, a1Suffix = 'A1:Z10000', 
     }
   }
   if (dateCol < 0) {
-    dateCol = headers.findIndex(
-      (h) =>
-        /^date$/i.test(h) ||
-        /^calendar/i.test(h) ||
-        /^\s*day\s*$/i.test(h) ||
-        /^timestamp$/i.test(h)
-    );
+    dateCol = headers.findIndex((h) => {
+      const hl = String(h || '').trim();
+      return (
+        /^date$/i.test(hl) ||
+        /^calendar/i.test(hl) ||
+        /^\s*day\s*$/i.test(hl) ||
+        /^timestamp$/i.test(hl) ||
+        /request[_\s-]?date/i.test(hl)
+      );
+    });
   }
   if (dateCol < 0) dateCol = 0;
   const today = todayCTDateStr();
@@ -45,7 +48,9 @@ async function readSheetFilterToday(spreadsheetId, tab, a1Suffix = 'A1:Z10000', 
     const d = normalizeDateCell(row[dateCol]);
     if (d === today) rowsToday.push(row);
   }
-  return { headers, rowsToday, rowsAll: body, dateCol, today };
+  const dateHeader =
+    dateCol >= 0 && dateCol < headers.length ? String(headers[dateCol] || '').trim() : '';
+  return { headers, rowsToday, rowsAll: body, dateCol, today, dateHeader };
 }
 
 /**
@@ -83,13 +88,16 @@ async function readSheetFilterWeek(spreadsheetId, tab, a1Suffix = 'A1:Z10000', o
     }
   }
   if (dateCol < 0) {
-    dateCol = headers.findIndex(
-      (h) =>
-        /^date$/i.test(h) ||
-        /^calendar/i.test(h) ||
-        /^\s*day\s*$/i.test(h) ||
-        /^timestamp$/i.test(h)
-    );
+    dateCol = headers.findIndex((h) => {
+      const hl = String(h || '').trim();
+      return (
+        /^date$/i.test(hl) ||
+        /^calendar/i.test(hl) ||
+        /^\s*day\s*$/i.test(hl) ||
+        /^timestamp$/i.test(hl) ||
+        /request[_\s-]?date/i.test(hl)
+      );
+    });
   }
   if (dateCol < 0) dateCol = 0;
   const body = values.slice(1);
