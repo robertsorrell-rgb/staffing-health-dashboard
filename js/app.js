@@ -2016,7 +2016,14 @@ function buildDashboardBriefContext(results, errors) {
       topGroups: (stl.by_sales_group || []).slice(0, 6).map((g) => ({
         group: g.group,
         avgMin: g.avg_speed_to_lead_minutes,
+        medMin: g.median_speed_to_lead_minutes ?? null,
         rows: g.rows,
+      })),
+      topHours: (stl.by_hour || []).slice(0, 8).map((h) => ({
+        hour: h.hour_label,
+        avgMin: h.avg_speed_to_lead_minutes,
+        medMin: h.median_speed_to_lead_minutes ?? null,
+        rows: h.rows,
       })),
     };
     if (stl.note) ctx.speedToLead.note = String(stl.note).slice(0, 220);
@@ -2310,22 +2317,36 @@ function renderSpeedToLeadPanel(data, errMsg) {
   </div>`;
 
   const groups = data.by_sales_group || [];
-  let table = '';
-  if (groups.length) {
-    const rows = groups
-      .slice(0, 14)
+  const hours = data.by_hour || [];
+  let breakdown = '';
+  if (groups.length || hours.length) {
+    const groupRows = groups
+      .slice(0, 18)
       .map(
         (g) =>
-          `<tr><td>${escapeHtml(String(g.group))}</td><td class="num">${g.rows}</td><td class="num">${g.avg_speed_to_lead_minutes != null ? `${formatStlMinutes(g.avg_speed_to_lead_minutes)} min` : '—'}</td></tr>`
+          `<tr><td>${escapeHtml(String(g.group))}</td><td class="num">${g.rows}</td><td class="num">${g.avg_speed_to_lead_minutes != null ? `${formatStlMinutes(g.avg_speed_to_lead_minutes)} min` : '—'}</td><td class="num">${g.median_speed_to_lead_minutes != null ? `${formatStlMinutes(g.median_speed_to_lead_minutes)} min` : '—'}</td></tr>`
       )
       .join('');
-    table = `<div class="preview-table-wrap" style="margin-top:14px;"><table class="preview-table"><thead><tr><th>Sales group</th><th class="num">Leads</th><th class="num">Avg STL</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    const hourRows = hours
+      .slice(0, 28)
+      .map(
+        (h) =>
+          `<tr><td>${escapeHtml(String(h.hour_label))}</td><td class="num">${h.rows}</td><td class="num">${h.avg_speed_to_lead_minutes != null ? `${formatStlMinutes(h.avg_speed_to_lead_minutes)} min` : '—'}</td><td class="num">${h.median_speed_to_lead_minutes != null ? `${formatStlMinutes(h.median_speed_to_lead_minutes)} min` : '—'}</td></tr>`
+      )
+      .join('');
+    const groupBlock = groups.length
+      ? `<div class="preview-table-wrap stl-breakdown-col"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Avg</th><th class="num">Med</th></tr></thead><tbody>${groupRows}</tbody></table></div>`
+      : '';
+    const hourBlock = hours.length
+      ? `<div class="preview-table-wrap stl-breakdown-col"><table class="preview-table stl-breakdown-table"><thead><tr><th>Hour (grain)</th><th class="num">Leads</th><th class="num">Avg</th><th class="num">Med</th></tr></thead><tbody>${hourRows}</tbody></table></div>`
+      : '';
+    breakdown = `<div class="stl-breakdown-grid">${groupBlock}${hourBlock}</div>`;
   } else if ((sum.rows_with_valid_minutes || 0) === 0 && (sum.rows_today || 0) > 0) {
-    table =
+    breakdown =
       '<p class="panel-muted" style="margin-top:12px;">No numeric speed-to-lead values parsed for today — check column detection or set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX.</p>';
   }
 
-  body.innerHTML = note + capNote + kpi + table;
+  body.innerHTML = note + capNote + kpi + breakdown;
 }
 
 function applyDashboardData(results, errors) {

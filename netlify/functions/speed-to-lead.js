@@ -28,15 +28,35 @@ function lookerExploreUrlFromEnv() {
 
 function salesGroupColumnIndex(headers) {
   const lower = headers.map((h) => String(h || '').trim().toLowerCase());
-  const idx = lower.findIndex(
-    (h) =>
-      h === 'sales group' ||
-      h.includes('sales group') ||
-      h === 'sales_group' ||
-      h === 'queue' ||
-      (h.includes('queue') && !h.includes('request'))
-  );
+  const rules = [
+    (h) => h === 'sales group' || h.includes('sales group') || h === 'sales_group',
+    (h) => h.includes('work_group_blended') || (h.includes('work_group') && h.includes('blended')),
+    (h) => h.includes('lead_source_group'),
+    (h) => h === 'queue' || (h.includes('queue') && !h.includes('request') && !h.includes('transfer')),
+  ];
+  for (const rule of rules) {
+    const idx = lower.findIndex(rule);
+    if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+/** Row grain hour bucket, e.g. contacts_w_lead_source.created_at_hour ("YYYY-MM-DD HH"). */
+function hourBucketColumnIndex(headers) {
+  const lower = headers.map((h) => String(h || '').trim().toLowerCase());
+  const idx = lower.findIndex((h) => {
+    if (h.includes('hour_of_day')) return false;
+    return h.includes('created_at_hour') || (h.includes('created_at') && h.includes('_hour'));
+  });
   return idx >= 0 ? idx : -1;
+}
+
+function hourLabelSortKey(label) {
+  const s = String(label ?? '').trim();
+  const m = s.match(/\s(\d{1,2})$/);
+  if (m) return parseInt(m[1], 10);
+  const m2 = s.match(/^(\d{1,2})(?::\d{2})?$/);
+  return m2 ? parseInt(m2[1], 10) : 999;
 }
 
 /** Prefer env SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX (0-based); else score headers. */
@@ -308,6 +328,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
   }
 
   const sgCol = salesGroupColumnIndex(headers);
+  const hrCol = hourBucketColumnIndex(headers);
 
   if (speedCol < 0) {
     const fieldList =
@@ -348,7 +369,10 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
     Number.isFinite(capRaw) && capRaw > 0 ? capRaw : 1440;
 
   const minutesList = [];
+  /** @type {Map<string, { sum: number, values: number[] }>} */
   const byGroup = new Map();
+  /** @type {Map<string, { sum: number, values: number[] }>} */
+  const byHour = new Map();
   let excludedAboveCap = 0;
 
   for (const row of rows) {
@@ -360,10 +384,18 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
     }
     minutesList.push(mins);
     const g = sgCol >= 0 ? String(row[sgCol] ?? '').trim() || '—' : '—';
-    const cur = byGroup.get(g) || { sum: 0, n: 0 };
-    cur.sum += mins;
-    cur.n += 1;
-    byGroup.set(g, cur);
+    const curG = byGroup.get(g) || { sum: 0, values: [] };
+    curG.sum += mins;
+    curG.values.push(mins);
+    byGroup.set(g, curG);
+
+    if (hrCol >= 0) {
+      const hl = String(row[hrCol] ?? '').trim() || '—';
+      const curH = byHour.get(hl) || { sum: 0, values: [] };
+      curH.sum += mins;
+      curH.values.push(mins);
+      byHour.set(hl, curH);
+    }
   }
 
   const avg =
@@ -373,15 +405,38 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
   const med = median(minutesList);
 
   const by_sales_group = [...byGroup.entries()]
-    .map(([group, { sum, n }]) => ({
-      group,
-      rows: n,
-      avg_speed_to_lead_minutes: Math.round((sum / n) * 100) / 100,
-    }))
+    .map(([group, { sum, values }]) => {
+      const n = values.length;
+      const medG = median(values);
+      return {
+        group,
+        rows: n,
+        avg_speed_to_lead_minutes: Math.round((sum / n) * 100) / 100,
+        median_speed_to_lead_minutes: medG != null ? Math.round(medG * 100) / 100 : null,
+      };
+    })
     .sort((a, b) => {
       if (b.rows !== a.rows) return b.rows - a.rows;
       return String(a.group).localeCompare(String(b.group));
     });
+
+  const by_hour = [...byHour.entries()]
+    .map(([hour_label, { sum, values }]) => {
+      const n = values.length;
+      const medH = median(values);
+      return {
+        hour_label,
+        hour_sort: hourLabelSortKey(hour_label),
+        rows: n,
+        avg_speed_to_lead_minutes: Math.round((sum / n) * 100) / 100,
+        median_speed_to_lead_minutes: medH != null ? Math.round(medH * 100) / 100 : null,
+      };
+    })
+    .sort((a, b) => {
+      if (a.hour_sort !== b.hour_sort) return a.hour_sort - b.hour_sort;
+      return String(a.hour_label).localeCompare(String(b.hour_label));
+    })
+    .map(({ hour_sort: _hs, ...rest }) => rest);
 
   return {
     configured: true,
@@ -403,6 +458,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
         : {}),
     },
     by_sales_group: by_sales_group.slice(0, 32),
+    by_hour: by_hour.slice(0, 48),
     fetched_at: new Date().toISOString(),
     ...(speedColumnInferred ? { speed_column_inferred: true } : {}),
     ...exploreBit,

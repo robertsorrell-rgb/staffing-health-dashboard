@@ -1500,6 +1500,29 @@ table.rollup-table tfoot tr.rollup-sum-row td {
   margin: 0 0 4px;
   line-height: 1.4;
 }
+.stl-breakdown-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 14px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .stl-breakdown-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.stl-breakdown-col {
+  margin-top: 0;
+  min-width: 0;
+}
+
+.stl-breakdown-table {
+  font-size: 0.92rem;
+}
+
 .stl-meta-line .stl-looker-link {
   margin-left: 10px;
   white-space: nowrap;

@@ -53,6 +53,7 @@ async function main() {
     fields: [
       'contacts_w_lead_source.created_at_date',
       'contacts_w_lead_source.created_at_hour',
+      'call_data.work_group_blended',
       'call_data.dial_time_to_first_attempt_activated_sec',
     ],
     pivots: [],
