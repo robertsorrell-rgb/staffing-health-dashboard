@@ -1,4 +1,5 @@
 import { heatmapBandClass } from './heatmap-bands.js';
+import { computePeopleHeatmapMaxes, peopleHeatmapCellStyle } from './heatmap-people-colors.js';
 import { mergeCombinedByGroupRows } from './vto-canonical-sales-group.js';
 
 /** Short weekday (Intl en-US in Chicago) → compact abbrev (shared: OT early warning + VTO week range). */
@@ -244,7 +245,34 @@ async function fetchJson(url) {
   return data;
 }
 
+function formatHeatmapNetStaffingNumber(d) {
+  if (d == null || Number.isNaN(Number(d))) return '—';
+  const rounded = Math.round(Number(d) * 10) / 10;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return String(rounded);
+}
+
+function setNetStaffingSourceBanner(payload) {
+  const el = document.getElementById('net-staffing-source-banner');
+  if (!el || !payload) return;
+  const parts = [];
+  if (payload.assembled_skipped_reason) parts.push(payload.assembled_skipped_reason);
+  if (payload.assembled_fallback_reason) parts.push(payload.assembled_fallback_reason);
+  if (parts.length) {
+    el.hidden = false;
+    el.textContent = parts.join(' ');
+    el.style.fontWeight = '600';
+    el.style.color = 'var(--amber)';
+  } else {
+    el.hidden = true;
+    el.textContent = '';
+    el.style.fontWeight = '';
+    el.style.color = '';
+  }
+}
+
 function renderHeatmap(container, payload) {
+  setNetStaffingSourceBanner(payload);
   container.innerHTML = '';
   if (!payload.ok || !payload.matrix || !payload.matrix.length) {
     container.innerHTML = `<p class="panel-muted" style="padding:16px;">${
@@ -253,7 +281,21 @@ function renderHeatmap(container, payload) {
     }</p>`;
     return;
   }
+  const unit =
+    payload.net_staffing_unit || (payload.source === 'assembled' ? 'people' : 'percent');
+  const titleEl = document.getElementById('net-staffing-card-title');
+  if (titleEl) {
+    const rollup = payload.assembled_hour_rollup === 'sum' ? 'sum' : 'average';
+    titleEl.textContent =
+      unit === 'people'
+        ? `Net staffing (Assembled — hourly ${rollup} of half-hour nets vs requirement)`
+        : 'Net staffing vs target (% deviation — Capacity Pull)';
+  }
+  const bandFn = heatmapBandClass;
   const hours = payload.hours || [];
+  const peopleMaxes =
+    unit === 'people' ? computePeopleHeatmapMaxes(payload.matrix, hours) : { maxAgg: 0, maxGroups: 0 };
+
   const table = document.createElement('table');
   table.className = 'heatmap-table';
   const thead = document.createElement('thead');
@@ -283,9 +325,25 @@ function renderHeatmap(container, payload) {
       if (d == null) {
         td.textContent = '—';
         td.className = 'hm-neutral';
+      } else if (unit === 'people') {
+        td.textContent = formatHeatmapNetStaffingNumber(d);
+        const { className, style } = peopleHeatmapCellStyle(
+          d,
+          isAggregate,
+          peopleMaxes.maxAgg,
+          peopleMaxes.maxGroups
+        );
+        td.className = className;
+        Object.assign(td.style, style);
+        const roll =
+          payload.assembled_hour_rollup === 'sum' ? 'sum of 30‑min slots' : 'avg of 30‑min slots';
+        const scaleHint = isAggregate
+          ? `Aggregate green scale (max ${formatHeatmapNetStaffingNumber(peopleMaxes.maxAgg)})`
+          : `Queue green scale (max ${formatHeatmapNetStaffingNumber(peopleMaxes.maxGroups)})`;
+        td.title = `Net staffing ${formatHeatmapNetStaffingNumber(d)} (${roll}). ${scaleHint}. Negatives: yellow / orange / red by depth.`;
       } else {
         td.textContent = `${d > 0 ? '+' : ''}${d}%`;
-        td.className = heatmapBandClass(d);
+        td.className = bandFn(d);
         td.title = `Deviation ${d}%`;
       }
       tr.appendChild(td);
@@ -1262,9 +1320,18 @@ function generateLocalDailyBrief(context, meta) {
     const worstShort = sortedMin[0];
     const worstLong = sortedMax[0];
     const src = ns.source ? ` Data source: ${ns.source}.` : '';
-    let line = `Net staffing vs target:${src}`;
+    const people = ns.netStaffingUnit === 'people';
+    let line = people ? `Net staffing (surplus people vs requirement):${src}` : `Net staffing vs target:${src}`;
     if (worstShort && worstLong) {
-      line += ` Deepest shortfall: ${worstShort.group} (${worstShort.minDeviationPct}% vs target near ${formatBriefCtHour(worstShort.atHourMin)}). Highest overshoot: ${worstLong.group} (${worstLong.maxDeviationPct}% near ${formatBriefCtHour(worstLong.atHourMax)}).`;
+      if (people) {
+        const roll =
+          ns.hourRollup === 'sum'
+            ? 'hourly sum of 30‑min Assembled slots'
+            : 'hourly average of 30‑min Assembled slots';
+        line += ` Deepest dip: ${worstShort.group} (${worstShort.minDeviationPct} people net — ${roll}). Highest surplus: ${worstLong.group} (${worstLong.maxDeviationPct} near ${formatBriefCtHour(worstLong.atHourMax)}).`;
+      } else {
+        line += ` Deepest shortfall: ${worstShort.group} (${worstShort.minDeviationPct}% vs target near ${formatBriefCtHour(worstShort.atHourMin)}). Highest overshoot: ${worstLong.group} (${worstLong.maxDeviationPct}% near ${formatBriefCtHour(worstLong.atHourMax)}).`;
+      }
     } else {
       line += ' See heatmap for hour-by-hour detail.';
     }
@@ -1371,14 +1438,31 @@ function generateLocalDailyBrief(context, meta) {
   }
 
   if (ns?.rows?.length) {
-    const mins = ns.rows.map((r) => r.minDeviationPct).filter((v) => v != null);
-    const meanMin = mins.length ? mins.reduce((a, b) => a + b, 0) / mins.length : null;
-    if (meanMin != null && meanMin <= -4) {
-      whereParts.push('Net staffing skews short of target across multiple slices — expect tighter capacity unless demand eases.');
-    } else if (meanMin != null && meanMin >= 4) {
-      whereParts.push('Net staffing skews above target in aggregate — watch idle and opportunity for VTO or redeployment.');
+    const agg = ns.rows.find((r) => /^aggregate$/i.test(String(r.group || '').trim()));
+    if (ns.netStaffingUnit === 'people' && agg && agg.minDeviationPct != null) {
+      const lo = agg.minDeviationPct;
+      const hi = agg.maxDeviationPct;
+      if (lo <= -25) {
+        whereParts.push(
+          'Aggregate net staffing goes meaningfully negative in at least one hour — you run short vs requirement in that window.'
+        );
+      } else if (hi != null && hi >= 40) {
+        whereParts.push(
+          'Aggregate net staffing is strongly positive in places — surplus versus requirement; balance with idle and VTO policy.'
+        );
+      } else {
+        whereParts.push('Aggregate net staffing is mixed hour to hour; the heatmap totals are the source of truth.');
+      }
     } else {
-      whereParts.push('Net staffing is mixed: a few groups/hours drive most of the story; the heatmap is the source of truth.');
+      const mins = ns.rows.map((r) => r.minDeviationPct).filter((v) => v != null);
+      const meanMin = mins.length ? mins.reduce((a, b) => a + b, 0) / mins.length : null;
+      if (meanMin != null && meanMin <= -4) {
+        whereParts.push('Net staffing skews short of target across multiple slices — expect tighter capacity unless demand eases.');
+      } else if (meanMin != null && meanMin >= 4) {
+        whereParts.push('Net staffing skews above target in aggregate — watch idle and opportunity for VTO or redeployment.');
+      } else {
+        whereParts.push('Net staffing is mixed: a few groups/hours drive most of the story; the heatmap is the source of truth.');
+      }
     }
   }
 
@@ -1410,19 +1494,36 @@ function generateLocalDailyBrief(context, meta) {
     const sortedMin = [...ns.rows]
       .filter((r) => r.minDeviationPct != null)
       .sort((a, b) => a.minDeviationPct - b.minDeviationPct);
+    const people = ns.netStaffingUnit === 'people';
+    const minTh = people ? -18 : -8;
     for (const r of sortedMin.slice(0, 2)) {
-      actions.push(
-        `Staffing: close the gap for ${r.group} around ${formatBriefCtHour(r.atHourMin)} (${r.minDeviationPct}% vs target).`
-      );
+      if (people) {
+        if (r.minDeviationPct <= minTh) {
+          actions.push(
+            `Staffing: relieve the shortfall for ${r.group} around ${formatBriefCtHour(r.atHourMin)} (${r.minDeviationPct} people net that hour).`
+          );
+        }
+      } else {
+        actions.push(
+          `Staffing: close the gap for ${r.group} around ${formatBriefCtHour(r.atHourMin)} (${r.minDeviationPct}% vs target).`
+        );
+      }
     }
     const sortedMax = [...ns.rows]
       .filter((r) => r.maxDeviationPct != null)
       .sort((a, b) => b.maxDeviationPct - a.maxDeviationPct);
     const fat = sortedMax[0];
-    if (fat && fat.maxDeviationPct >= 8) {
-      actions.push(
-        `If demand allows, trim or rebalance ${fat.group} near ${formatBriefCtHour(fat.atHourMax)} (${fat.maxDeviationPct}% above target).`
-      );
+    const maxTh = people ? 35 : 8;
+    if (fat && fat.maxDeviationPct >= maxTh) {
+      if (people) {
+        actions.push(
+          `If demand allows, trim surplus for ${fat.group} near ${formatBriefCtHour(fat.atHourMax)} (${fat.maxDeviationPct} people net that hour).`
+        );
+      } else {
+        actions.push(
+          `If demand allows, trim or rebalance ${fat.group} near ${formatBriefCtHour(fat.atHourMax)} (${fat.maxDeviationPct}% above target).`
+        );
+      }
     }
   }
   const tm0 = ad && ad.topManagers && ad.topManagers[0];
@@ -1502,6 +1603,9 @@ function buildDashboardBriefContext(results, errors) {
     });
     ctx.netStaffing = {
       source: ns.source || null,
+      netStaffingUnit:
+        ns.net_staffing_unit || (ns.source === 'assembled' ? 'people' : 'percent'),
+      hourRollup: ns.assembled_hour_rollup || (ns.source === 'assembled' ? 'avg' : null),
       hourRange: hours.length ? [hours[0], hours[hours.length - 1]] : [],
       rows: rowSummaries,
     };

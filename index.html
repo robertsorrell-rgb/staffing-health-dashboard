@@ -4,9 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staffing Health Dashboard</title>
-  <link rel="stylesheet" href="css/styles.css?v=60" />
+  <link rel="stylesheet" href="css/styles.css?v=63" />
 </head>
 <body>
+  <div class="dash-root">
   <header class="app-header" role="banner">
     <div class="header-brand">
       <div class="brand-mark" aria-hidden="true">VT</div>
@@ -39,7 +40,8 @@
       </div>
 
       <div class="heatmap-card">
-        <div class="panel-title heatmap-card-title">Net staffing vs target (% deviation)</div>
+        <div class="panel-title heatmap-card-title" id="net-staffing-card-title">Net staffing</div>
+        <p class="heatmap-source-banner panel-muted" id="net-staffing-source-banner" hidden role="status"></p>
         <div id="net-staffing-mount"></div>
       </div>
 
@@ -113,7 +115,8 @@
       <p class="panel-muted ai-brief-meta" id="ai-brief-meta"></p>
     </section>
   </main>
+  </div>
 
-  <script type="module" src="js/app.js?v=67"></script>
+  <script type="module" src="js/app.js?v=74"></script>
 </body>
 </html>

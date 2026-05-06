@@ -1,7 +1,7 @@
 /**
- * Net staffing heatmap — asymmetric bands (plan default).
+ * Net staffing heatmap — asymmetric bands for Capacity Pull % (sheet).
+ * Assembled people units use adaptive colors in `heatmap-people-colors.js`.
  * d = signed % deviation from target (negative = understaffed).
- * Tune here without hunting through render logic.
  */
 export const HEATMAP_BANDS_DOC = {
   green: '−10% ≤ d ≤ 0 (muted green)',

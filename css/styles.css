@@ -34,6 +34,8 @@
   --radius: 6px;
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', 'Courier New', monospace;
+  /** Whole-dashboard visual scale (see `.dash-root`) */
+  --dash-zoom: 0.91;
 }
 
 *,
@@ -52,6 +54,14 @@ body {
   color: var(--text-pri);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+}
+
+/**
+ * Slightly smaller UI so more fits on one screen; zoom reflows layout (Chromium, Safari, modern Firefox).
+ * Tune `--dash-zoom` on `:root` to adjust density without touching component CSS.
+ */
+.dash-root {
+  zoom: var(--dash-zoom);
 }
 
 .app-header {
@@ -764,6 +774,11 @@ a.digest-link {
   color: var(--text-sec);
 }
 
+/** People-scale heatmap: colors applied inline; keep weight/border from table */
+.heatmap-table td.heatmap-cell-people {
+  font-weight: 600;
+}
+
 .sparkline-wrap {
   margin-top: 10px;
   display: flex;
@@ -1006,6 +1021,13 @@ table.rollup-table tfoot tr.rollup-sum-row td {
   width: 22%;
   max-width: none;
   white-space: nowrap;
+}
+
+.heatmap-source-banner {
+  margin: 8px 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 920px;
 }
 
 .ai-brief-header {

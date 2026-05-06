@@ -20,6 +20,35 @@ const CAP_QUEUE_MAP = [
 
 const AGGREGATE_LABEL = 'Aggregate';
 
+/**
+ * avg (default) = mean of half-hour nets in the clock hour — matches “one agent off for the hour” (~1 unit),
+ *   since Assembled applies ~−1 per 30‑min slot for that change (sum would double-count to ~2).
+ * sum = add both slots — use ASSEMBLED_NET_STAFFING_HOUR_ROLLUP=sum if you want hourly totals summed.
+ */
+function hourRollupMode() {
+  const r = (env('ASSEMBLED_NET_STAFFING_HOUR_ROLLUP') || 'avg').trim().toLowerCase();
+  return r === 'sum' ? 'sum' : 'avg';
+}
+
+function resolvedHourNet(cell, rollup) {
+  if (!cell || !Number.isFinite(cell.sum)) return null;
+  if (rollup === 'sum') return cell.sum;
+  return cell.sum / Math.max(1, cell.n || 1);
+}
+
+/**
+ * Optional env ASSEMBLED_NET_STAFFING_QUEUES — comma-separated Assembled queue names
+ * (exact strings matching CAP_QUEUE_MAP `queue`, e.g. `College and Grad TP_CC90_New`).
+ * Limits pulls to those queues so Aggregate matches a filtered Assembled timeline.
+ */
+function activeCapQueueMap() {
+  const raw = (env('ASSEMBLED_NET_STAFFING_QUEUES') || '').trim();
+  if (!raw) return CAP_QUEUE_MAP;
+  const allow = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+  const filtered = CAP_QUEUE_MAP.filter((q) => allow.has(q.queue));
+  return filtered.length ? filtered : CAP_QUEUE_MAP;
+}
+
 /** yyyy-MM-dd CT wall calendar */
 function todayIsoCt(d = new Date()) {
   return d.toLocaleDateString('en-CA', { timeZone: TZ });
@@ -131,11 +160,14 @@ async function loadNetStaffingFromAssembled() {
   const opStartMin = parseInt(env('ASSEMBLED_OP_START_MINUTE'), 10);
   const opEndMin = parseInt(env('ASSEMBLED_OP_END_MINUTE'), 10);
 
-  const queueNames = CAP_QUEUE_MAP.map((q) => q.queue);
+  const capMap = activeCapQueueMap();
+  const queueNames = capMap.map((q) => q.queue);
   const sitesRes = await assembledFetch(apiBase, apiKey, '/sites', {});
   const queuesRes = await assembledFetch(apiBase, apiKey, '/queues', {});
   const siteId = resolveSiteId(sitesRes, siteName);
   const queueIdMap = resolveQueueIds(queuesRes, queueNames);
+
+  const rollup = hourRollupMode();
 
   const dateIso = todayIsoCt();
   const dayStartMs = chicagoMidnightUtcMs(dateIso);
@@ -144,11 +176,11 @@ async function loadNetStaffingFromAssembled() {
   const startSec = Math.floor(opStartMs / 1000);
   const endSec = Math.floor(opEndMs / 1000);
 
-  /** label -> hour -> { sum, n } */
+  /** label -> hour -> { sum } */
   const buckets = {};
-  for (const q of CAP_QUEUE_MAP) buckets[q.label] = {};
+  for (const q of capMap) buckets[q.label] = {};
 
-  for (const qDef of CAP_QUEUE_MAP) {
+  for (const qDef of capMap) {
     const queueId = queueIdMap[qDef.queue];
     if (!queueId) continue;
 
@@ -183,6 +215,7 @@ async function loadNetStaffingFromAssembled() {
           it.staffing_net != null && it.staffing_net !== '' ? Number(it.staffing_net) : scheduled - required;
         if (!Number.isFinite(net)) continue;
 
+        /** Bucket intervals per clock hour; rollup sum vs avg applied when building matrix. */
         const b = buckets[qDef.label];
         if (!b[hr]) b[hr] = { sum: 0, n: 0 };
         b[hr].sum += net;
@@ -195,24 +228,26 @@ async function loadNetStaffingFromAssembled() {
   }
 
   buckets[AGGREGATE_LABEL] = {};
-  const aggregateLabels = CAP_QUEUE_MAP.map((q) => q.label);
+  const aggregateLabels = capMap.map((q) => q.label);
   const hourSetAgg = new Set();
   for (const lbl of aggregateLabels) {
     for (const hr of Object.keys(buckets[lbl] || {})) hourSetAgg.add(parseInt(hr, 10));
   }
+  /** Aggregate row = sum of each queue’s hourly rolled-up net (matches multi-queue Assembled aggregate). */
   for (const hr of hourSetAgg) {
     let sumAgg = 0;
     let parts = 0;
     for (const lbl of aggregateLabels) {
       const cell = buckets[lbl][hr];
-      if (!cell || !cell.n) continue;
-      sumAgg += cell.sum / cell.n;
+      const v = resolvedHourNet(cell, rollup);
+      if (v == null || !Number.isFinite(v)) continue;
+      sumAgg += v;
       parts += 1;
     }
-    if (parts > 0) buckets[AGGREGATE_LABEL][hr] = { sum: sumAgg, n: parts };
+    if (parts > 0) buckets[AGGREGATE_LABEL][hr] = { sum: sumAgg };
   }
 
-  const groupOrder = [AGGREGATE_LABEL].concat(CAP_QUEUE_MAP.map((q) => q.label));
+  const groupOrder = [AGGREGATE_LABEL].concat(capMap.map((q) => q.label));
   const hourSet = new Set();
   for (const lbl of groupOrder) {
     if (!buckets[lbl]) continue;
@@ -225,9 +260,14 @@ async function loadNetStaffingFromAssembled() {
     const hoursOut = {};
     for (const hr of hours) {
       const cell = buckets[label] && buckets[label][hr];
-      if (!cell || !cell.n) continue;
-      const avg = cell.sum / cell.n;
-      hoursOut[String(hr)] = Math.round(avg * 10) / 10;
+      let v;
+      if (label === AGGREGATE_LABEL) {
+        v = cell && Number.isFinite(cell.sum) ? cell.sum : null;
+      } else {
+        v = resolvedHourNet(cell, rollup);
+      }
+      if (v == null || !Number.isFinite(v)) continue;
+      hoursOut[String(hr)] = Math.round(v * 10) / 10;
     }
     if (Object.keys(hoursOut).length > 0) matrix.push({ group: label, hours: hoursOut });
   }
@@ -237,6 +277,10 @@ async function loadNetStaffingFromAssembled() {
     matrix,
     hours,
     source: 'assembled',
+    /** Heatmap shows raw Assembled `staffing_net` units (people-style). */
+    net_staffing_unit: 'people',
+    assembled_hour_rollup: rollup,
+    assembled_queues_used: queueNames,
     fetched_at: new Date().toISOString(),
     note:
       matrix.length === 0
@@ -247,6 +291,7 @@ async function loadNetStaffingFromAssembled() {
 
 module.exports = {
   loadNetStaffingFromAssembled,
+  activeCapQueueMap,
   CAP_QUEUE_MAP,
   AGGREGATE_LABEL,
 };

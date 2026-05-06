@@ -147,44 +147,55 @@ exports.handler = async (event) => {
   const spreadsheetId = env('CAPACITY_PULL_SPREADSHEET_ID');
   const tab = env('CAPACITY_PULL_TAB') || 'Capacity Pull';
 
-  /** auto: assembled if key present, else sheet; assembled|sheet forces primary */
+  /**
+   * assembled | auto | sheet — only affects fallback when Assembled fails:
+   * `assembled` = no sheet fallback (errors if empty); auto/sheet = allow Capacity Pull fallback.
+   * Assembled is attempted whenever ASSEMBLED_API_KEY is set unless NET_STAFFING_DISABLE_ASSEMBLED=1.
+   */
   const mode = sourceMode || (apiKey ? 'auto' : 'sheet');
+  const disableAssembled = ['1', 'true', 'yes'].includes(
+    String(env('NET_STAFFING_DISABLE_ASSEMBLED') || '').trim().toLowerCase()
+  );
+  const tryAssembled = !!apiKey && !disableAssembled;
+  const assembledOnly = mode === 'assembled';
+
+  /** When present on sheet responses, UI explains why Capacity Pull (%) is shown instead of Assembled (people). */
+  let assembledFallbackReason = null;
 
   try {
-    const tryAssembled =
-      apiKey && (mode === 'assembled' || mode === 'auto');
-
     if (tryAssembled) {
       try {
         const asm = await loadNetStaffingFromAssembled();
         if (asm && asm.matrix && asm.matrix.length) {
           return ok({ ok: true, ...asm, matrix: filterNetStaffingMatrix(asm.matrix) }, CACHE_SEC);
         }
-        if (mode === 'assembled') {
+        assembledFallbackReason =
+          asm?.note ||
+          'Assembled returned no interval rows for today CT (check site, channel, queues, ASSEMBLED_NET_STAFFING_QUEUES, operating window).';
+        if (assembledOnly) {
           return ok(
             {
               ok: false,
               matrix: filterNetStaffingMatrix(asm?.matrix || []),
               hours: asm?.hours || [],
               source: 'assembled',
-              note: asm?.note || 'No interval data from Assembled for today CT.',
+              note: assembledFallbackReason,
               fetched_at: asm?.fetched_at || new Date().toISOString(),
             },
             CACHE_SEC
           );
         }
       } catch (e) {
-        if (mode === 'assembled') return errorResponse(e, 'net-staffing-assembled');
+        assembledFallbackReason = e.message || String(e);
+        if (assembledOnly) return errorResponse(e, 'net-staffing-assembled');
         // eslint-disable-next-line no-console
         console.warn('[net-staffing] Assembled failed, sheet fallback:', e.message);
       }
     }
 
     if (!spreadsheetId) {
-      if (mode === 'sheet')
-        return bad('CAPACITY_PULL_SPREADSHEET_ID not configured (CAPACITY_PULL_SOURCE=sheet)', 503);
       return bad(
-        'Net staffing: no sheet fallback (CAPACITY_PULL_SPREADSHEET_ID) after empty/failed Assembled',
+        'Net staffing: CAPACITY_PULL_SPREADSHEET_ID not configured (needed for Capacity Pull fallback)',
         503
       );
     }
@@ -229,6 +240,13 @@ exports.handler = async (event) => {
         matrix,
         hours,
         source: 'sheet',
+        net_staffing_unit: 'percent',
+        assembled_skipped_reason: !apiKey
+          ? 'Capacity Pull (% deviation). Add ASSEMBLED_API_KEY for Assembled net staffing (people).'
+          : disableAssembled
+            ? 'Capacity Pull (% deviation). NET_STAFFING_DISABLE_ASSEMBLED is set — remove it to use Assembled.'
+            : undefined,
+        assembled_fallback_reason: assembledFallbackReason || undefined,
         fetched_at: new Date().toISOString(),
       },
       CACHE_SEC
