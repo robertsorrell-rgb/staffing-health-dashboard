@@ -207,6 +207,36 @@ function inferSpeedMinutesColumnFromRows(headers, rows) {
   return bestIdx;
 }
 
+function cellIsComplexLookerValue(cell) {
+  if (cell == null) return false;
+  if (typeof cell !== 'object') return false;
+  if (Array.isArray(cell)) return false;
+  // Avoid treating Date as “pivot blob” (unlikely from Looker JSON, but cheap guard).
+  if (Object.prototype.toString.call(cell) === '[object Date]') return false;
+  return true;
+}
+
+/** When measures show as s / s_1 but cells are nested objects, index overrides cannot work. */
+function lookerPivotMinutesHint(headers, rows) {
+  if (!headers.length || !rows.length) return '';
+  const sample = rows.slice(0, 12);
+  let samples = 0;
+  let complex = 0;
+  for (let i = 0; i < headers.length; i++) {
+    const tail = headerLowerTail(headers[i]);
+    if (!/^s(_\d+)?$/i.test(tail)) continue;
+    for (const row of sample) {
+      if (!Array.isArray(row) || row.length <= i) continue;
+      samples += 1;
+      if (cellIsComplexLookerValue(row[i])) complex += 1;
+    }
+  }
+  if (samples >= 2 && complex / samples >= 0.5) {
+    return ' The s / s_1 / … columns are nested JSON (pivoted or multi-dimensional measures), not numeric minutes. In Looker, remove pivots and expose a single numeric speed-to-lead field per row (or use a different saved query). Setting SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX cannot fix this until a column contains plain numbers.';
+  }
+  return '';
+}
+
 /**
  * @returns {object} API payload body (before ok())
  */
@@ -240,6 +270,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
             .map((name, idx) => `${idx}: ${String(name || '').trim() || '(empty)'}`)
             .join('; ')}${headers.length > 20 ? ' …' : '.'}`
         : '';
+    const lookerPivotHint = source === 'looker' ? lookerPivotMinutesHint(headers, rows) : '';
     return {
       configured: true,
       source,
@@ -255,7 +286,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
       speed_column_used: null,
       note:
         source === 'looker'
-          ? `Looker JSON had no recognizable speed-to-lead minutes field. Set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX to the 0-based column index for minutes (see field list below), or rename the explore measure.${fieldList}`
+          ? `Looker JSON had no recognizable speed-to-lead minutes field. Set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX to the 0-based column index for minutes (see field list below), or rename the explore measure.${fieldList}${lookerPivotHint}`
           : `No speed-to-lead minutes column found. Set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX (0-based column index) or add a header containing both “speed” and “lead”.${fieldList}`,
       headers,
       rows_preview: rows.slice(0, 5),
