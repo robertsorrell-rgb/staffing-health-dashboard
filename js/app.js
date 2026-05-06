@@ -263,7 +263,7 @@ function setNetStaffingSourceBanner(payload) {
   if (!el || !payload) return;
   const warns = [];
   if (payload.assembled_skipped_reason) warns.push(payload.assembled_skipped_reason);
-  if (payload.assembled_fallback_reason) warns.push(payload.assembled_fallback_reason);
+  if (payload.assembled_error) warns.push(payload.assembled_error);
   const info = payload.assembled_note ? String(payload.assembled_note).trim() : '';
   if (warns.length) {
     el.hidden = false;
@@ -287,10 +287,19 @@ function renderHeatmap(container, payload) {
   setNetStaffingSourceBanner(payload);
   container.innerHTML = '';
   if (!payload.ok || !payload.matrix || !payload.matrix.length) {
-    container.innerHTML = `<p class="panel-muted" style="padding:16px;">${
+    const titleElEmpty = document.getElementById('net-staffing-card-title');
+    if (titleElEmpty) {
+      titleElEmpty.textContent =
+        payload.source === 'assembled'
+          ? 'Net staffing (Assembled — no data)'
+          : 'Net staffing vs target (% deviation — Capacity Pull)';
+    }
+    const emptyNote =
       payload.note ||
-      'No net staffing matrix for today CT (set ASSEMBLED_API_KEY and/or confirm Capacity Pull tab + CAPACITY_PULL_* env).'
-    }</p>`;
+      (payload.source === 'assembled'
+        ? 'Assembled returned no net staffing rows for this date and filters (check ASSEMBLED_* env and Staffing timeline parity).'
+        : 'No net staffing matrix for today CT (confirm Capacity Pull tab + CAPACITY_PULL_* env, or set ASSEMBLED_API_KEY).');
+    container.innerHTML = `<p class="panel-muted" style="padding:16px;">${emptyNote}</p>`;
     return;
   }
   const unit =
@@ -301,9 +310,7 @@ function renderHeatmap(container, payload) {
     titleEl.textContent =
       unit === 'people'
         ? `Net staffing (Assembled — hourly ${rollup} of 30‑min slots; same queue/channel as Staffing timeline)`
-        : payload.assembled_fallback_reason
-          ? 'Net staffing vs target (% deviation — Capacity Pull sheet; Assembled unavailable — see banner)'
-          : 'Net staffing vs target (% deviation — Capacity Pull)';
+        : 'Net staffing vs target (% deviation — Capacity Pull)';
   }
   const bandFn = heatmapBandClass;
   const hours = payload.hours || [];

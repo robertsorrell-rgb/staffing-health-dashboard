@@ -1,6 +1,6 @@
 # Staffing Health Dashboard
 
-Static dashboard for Consumer Sales staffing health: net staffing heatmap (Assembled API and/or Capacity Pull sheet), idle time from `CS_Hourly_Log`, adherence pings, and bot logs (VTO, Bobbot, call-out). Deploy on **Netlify** from GitHub; APIs are **Netlify Functions** backed by **Google Sheets** (service account) and optionally **Assembled** for capacity.
+Static dashboard for Consumer Sales staffing health: net staffing heatmap (**Assembled** when `ASSEMBLED_API_KEY` is set; Capacity Pull sheet only for explicit sheet-only mode), idle time from `CS_Hourly_Log`, adherence pings, and bot logs (VTO, Bobbot, call-out). Deploy on **Netlify** from GitHub; APIs are **Netlify Functions** backed by **Google Sheets** (service account) and optionally **Assembled** for capacity.
 
 Visual tokens align with the VCPU Dashboard (IBM Plex, navy / coral palette).
 
@@ -26,7 +26,7 @@ So you are **one working Netlify-style dev/prod URL** away from the full visual:
 
 3. Batch-share these workbooks: IDLE CONSUMER, Automated VTO bot workbook (Capacity Pull + Requests tabs), Targeted VTO, Bobbot, Live Floor Adherence, Call Out Main Flow (+ attendance tab).
 
-   Set **`ASSEMBLED_API_KEY`** (same Script Property as Capacity Pull refresh) so `/api/net-staffing` can pull live staffing without relying on the sheet. Sheet fallback uses tab **`Capacity Pull`** (two-row header layout).
+   Set **`ASSEMBLED_API_KEY`** (same Script Property as Capacity Pull refresh) so `/api/net-staffing` uses Assembled net staffing (there is **no** Capacity Pull sheet fallback when this key is set). Optional **`CAPACITY_PULL_SOURCE=sheet`** reads tab **`Capacity Pull`** (% deviation) instead of calling Assembled.
 
    [.env.example](.env.example) lists IDs and tabs. Share each workbook with the reader SA (**Viewer**).
 
@@ -168,7 +168,7 @@ node scripts/smoke-endpoints.js      # adherence, targeted-vto, others (needs .e
 
 | Path | Function |
 |------|----------|
-| `/api/net-staffing` | Net staffing matrix (Assembled + sheet fallback) |
+| `/api/net-staffing` | Net staffing matrix (Assembled when keyed; sheet only if `CAPACITY_PULL_SOURCE=sheet` or no key) |
 | `/api/idle-hourly-log` | Weighted idle % from hourly log |
 | `/api/adherence` | Ping counts + digest link |
 | `/api/targeted-vto` | Combined VTO from Offers (COMMITTED) + Requests_Submissions (Approved): today + **Sun–Sat CT week** `combined_week.by_group` |

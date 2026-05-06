@@ -83,15 +83,15 @@ These are **not** wired into Staffing Health by default; they show up in other t
 
 ---
 
-## Net staffing — Assembled API + Capacity Pull sheet
+## Net staffing — Assembled API (+ optional Capacity Pull sheet mode)
 
-### Primary: Assembled (`ASSEMBLED_API_KEY`)
+### Assembled (`ASSEMBLED_API_KEY`)
 
-Netlify function **`net-staffing.js`** calls Assembled **`GET /forecasted_vs_actuals`** with the same semantics as Apps Script `refreshCapacityPull()` (paginated `limit`/`offset`, site **Consumer Sales**, channel **phone**, interval **1800**, queues listed in `assembled-net-staffing.js`). Response payload matches the dashboard heatmap (`matrix`, `hours`).
+Netlify function **`net-staffing.js`** calls Assembled **`GET /forecasted_vs_actuals`** with the same semantics as Apps Script `refreshCapacityPull()` (paginated `limit`/`offset`, site **Consumer Sales**, channel **phone**, interval **1800**, queues listed in `assembled-net-staffing.js`). Response payload matches the dashboard heatmap (`matrix`, `hours`). Failures do **not** fall back to the Capacity Pull sheet.
 
 Env: see [.env.example](../.env.example) (`ASSEMBLED_*`, `CAPACITY_PULL_SOURCE`).
 
-### Sheet fallback: tab **Capacity Pull**
+### Sheet-only mode: tab **Capacity Pull** (`CAPACITY_PULL_SOURCE=sheet` or no API key)
 
 **Spreadsheet ID:** `1gU2f7IQdlpWojwWnsQbpRP1Vge79I0tr4n1AjI1K3uw` — Automated VTO bot workbook (`CAPACITY_PULL_SPREADSHEET_ID`)
 
