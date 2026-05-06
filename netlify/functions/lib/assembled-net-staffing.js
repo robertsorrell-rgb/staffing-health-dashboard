@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * Mirrors Capacity Pull Apps Script: Assembled /forecasted_vs_actuals → net staffing matrix.
+ * Net staffing from Assembled (people-style `staffing_net` per interval).
+ * Uses Assembled’s HTTP resource `/forecasted_vs_actuals` (their name — payload includes staffing metrics).
  */
 
 const { parseHourHeader } = require('./hour-headers.js');
@@ -445,12 +446,12 @@ async function loadNetStaffingFromAssembled() {
         ', '
       )}. Names must match Assembled (see CAP_QUEUE_MAP / ASSEMBLED_NET_STAFFING_QUEUES). Site “${siteName}”, channel “${channel}”.`;
     } else if (pullStats.apiRows > 0 && pullStats.acceptedRows === 0) {
-      emptyNote = `Assembled returned ${pullStats.apiRows} forecast interval rows for channel “${channel}” but none counted toward today CT (${dateIso}) or op window minutes ${opStartMin}–${opEndMin} (wrong CT day: ${pullStats.droppedWrongDay}, outside window: ${pullStats.droppedOutsideOpWindow}, unusable net: ${pullStats.droppedBadNet}, bad timestamps: ${pullStats.droppedBadStart}). Adjust ASSEMBLED_OP_* or confirm API interval timestamps are UTC seconds.`;
+      emptyNote = `Assembled returned ${pullStats.apiRows} staffing intervals for channel “${channel}” but none counted toward today CT (${dateIso}) or op window minutes ${opStartMin}–${opEndMin} (wrong CT day: ${pullStats.droppedWrongDay}, outside window: ${pullStats.droppedOutsideOpWindow}, unusable net: ${pullStats.droppedBadNet}, bad timestamps: ${pullStats.droppedBadStart}). Adjust ASSEMBLED_OP_* or confirm API interval timestamps are UTC seconds.`;
     } else {
       const siteHint = envSkipSite
         ? 'site filter off (ASSEMBLED_SKIP_SITE_FILTER)'
         : `site “${siteName}” as site_id + site (auto-retry without site also returned no rows)`;
-      emptyNote = `Assembled returned no forecast interval rows for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — in Assembled UI open Forecast vs Actual for this date/channel/queue; if blank there too, it is data not Netlify. Otherwise confirm API key is a full key for this company (not restricted) and channel name matches Assembled exactly.`;
+      emptyNote = `Assembled returned no staffing intervals for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — in Assembled, confirm **net staffing** (scheduled vs required / staffing surplus) exists for this date, channel, and queues; if it’s empty there too, this is missing Assembled data or API scope, not Netlify. Otherwise confirm the API key is a full key for this company (not restricted) and the channel name matches Assembled exactly.`;
     }
   } else if (assembledOmitSiteAuto) {
     assembledNoteOk = `Assembled net staffing uses queue + channel only (no site_id); site-scoped API returned no rows.`;
