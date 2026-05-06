@@ -62,6 +62,9 @@ function resolveSpeedMinutesColumnIndex(headers) {
     if (h.includes('speed') && (h.includes('contact') || h.includes('response'))) score += 12;
     if (/time[_\s-]?to[_\s-]?(contact|response|reply|touch|lead|call)/.test(h)) score += 12;
     if (/\b(ttc|speed_to_contact|contact_speed)\b/.test(h)) score += 11;
+    if (h.includes('dial_time_to_first') || (h.includes('time_to_first') && h.includes('attempt'))) score += 22;
+    if (/_sec\b|_seconds\b/.test(h)) score += 18;
+    if (/\bbucket\b/.test(h)) score -= 30;
     const timingWord =
       h.includes('min') ||
       h.includes('minute') ||
@@ -152,6 +155,23 @@ function parseMinutes(cell) {
   return null;
 }
 
+/** Looker often exposes STL as *_sec numeric dimensions — convert to minutes for the panel. */
+function headerSuggestsSecondsColumn(headerName) {
+  const h = String(headerName || '').trim().toLowerCase();
+  if (/\bbucket\b/.test(h)) return false;
+  if (/\b_sec\b|\b_secs\b|\b_seconds\b/.test(h)) return true;
+  if (/seconds?$/.test(h) && !h.includes('minute')) return true;
+  return false;
+}
+
+/** Numeric STL value as dashboard minutes (handles *_sec fields). */
+function speedValueAsMinutes(cell, headerName) {
+  const raw = parseMinutes(cell);
+  if (raw == null || !Number.isFinite(raw)) return null;
+  if (headerSuggestsSecondsColumn(headerName)) return raw / 60;
+  return raw;
+}
+
 function median(nums) {
   const a = nums.filter((x) => Number.isFinite(x)).sort((x, y) => x - y);
   if (!a.length) return null;
@@ -173,6 +193,8 @@ function isExcludedSpeedInferColumn(header) {
   if (/_date\b|_hour\b|hour_of_day/.test(h)) return true;
   if (/lead_count|net_lead|\.count\b|_count\b/.test(h)) return true;
   if (/\b_id\b/.test(h) || t.endsWith('_id')) return true;
+  if (/\bbucket\b/.test(h)) return true;
+  if (/talk_duration|ring_duration|hold_duration|queue_duration/.test(h)) return true;
   return false;
 }
 
@@ -202,16 +224,18 @@ function inferSpeedMinutesColumnFromRows(headers, rows) {
         const ymd = normalizeDateCell(cell);
         if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
       }
-      const m = parseMinutes(cell);
-      if (m != null && m >= 0.5 && m <= STL_INFER_MAX_MIN) nums.push(m);
+      const m = speedValueAsMinutes(cell, headers[i]);
+      if (m != null && m >= 0 && m <= STL_INFER_MAX_MIN) nums.push(m);
     }
     const need = Math.max(2, Math.ceil(sampleN * 0.15));
     if (nums.length < need) continue;
     const med = median(nums);
-    if (med == null || med < 1 || med > 7200) continue;
+    if (med == null || med < 0 || med > 7200) continue;
     const tail = headerLowerTail(headers[i]);
     let bonus = 0;
-    if (/^s(_\d+)?$/i.test(tail)) bonus += 80;
+    if (headerSuggestsSecondsColumn(headers[i]) && /first|attempt|dial|lead|contact/.test(String(headers[i]).toLowerCase()))
+      bonus += 120;
+    if (/^s(_\d+)?$/i.test(tail)) bonus += 35;
     if (/median|average|mean/.test(tail)) bonus += 25;
     const score = nums.length * 10 + bonus;
     if (score > bestScore) {
@@ -315,7 +339,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
   const byGroup = new Map();
 
   for (const row of rows) {
-    const mins = parseMinutes(row[speedCol]);
+    const mins = speedValueAsMinutes(row[speedCol], headers[speedCol]);
     if (mins == null || mins < 0 || mins > MAX_MIN) continue;
     minutesList.push(mins);
     const g = sgCol >= 0 ? String(row[sgCol] ?? '').trim() || '—' : '—';

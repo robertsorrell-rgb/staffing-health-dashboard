@@ -235,9 +235,45 @@ function lookerRunJsonToHeaderRows(data) {
   return { headers: [], rows: [] };
 }
 
+/**
+ * Explore metadata (dimensions, measures, joins). Used to pick real STL fields.
+ * @param {string} baseUrl
+ * @param {string} token
+ * @param {string} lookmlModelName e.g. singlestore_customer_acquisition
+ * @param {string} exploreName e.g. contacts_w_lead_source
+ * @returns {Promise<Record<string, unknown>>}
+ */
+async function lookerGetExplore(baseUrl, token, lookmlModelName, exploreName) {
+  const root = normalizeBaseUrl(baseUrl);
+  const m = encodeURIComponent(String(lookmlModelName).trim());
+  const e = encodeURIComponent(String(exploreName).trim());
+  const url = `${root}/api/${apiVersion()}/lookml_models/${m}/explores/${e}`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `token ${token}` },
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error(`Looker explore ${m}/${e} GET failed (${res.status}): ${text.slice(0, 500)}`);
+    err.statusCode = res.status >= 400 && res.status < 600 ? res.status : 502;
+    throw err;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const err = new Error('Looker explore GET returned non-JSON');
+    err.statusCode = 502;
+    throw err;
+  }
+}
+
 module.exports = {
   lookerLogin,
   lookerGetQuery,
+  lookerGetExplore,
   lookerCreateQuery,
   lookerRunQueryJson,
   lookerRunLookJson,
