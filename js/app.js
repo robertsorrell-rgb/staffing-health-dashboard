@@ -1043,53 +1043,87 @@ function htmlBobbotReachoutsColumn(bobbotData, bobbotErr, idleData, idleErr) {
   return `<div class="idle-split-col bobbot-reachouts-col"><div class="idle-split-heading">Intraday reach-outs</div><p class="panel-muted" style="font-size:11px;margin-bottom:8px;line-height:1.35;">${escapeHtml(sub)}</p>${body}</div>`;
 }
 
-/** Sun–Sat CT week: approved PTO hours by sales group (`pto_week_approved` from `/api/bobbot`). */
-function htmlPtoWeekApprovedRollup(week, errMsg, configured) {
-  if (errMsg || configured === false || !week || typeof week !== 'object') return '';
-
-  const meta =
-    week.week_start && week.week_end
-      ? `${fmtOtWarnDayCt(week.week_start)} – ${fmtOtWarnDayCt(week.week_end)} · Sun–Sat (CT)`
-      : week.label
-        ? `${week.label} · Sun–Sat (CT)`
-        : 'Sun–Sat · Central Time';
-
-  const warnMissingCol =
-    week.hours_column_found === false
-      ? `<p class="panel-muted" style="font-size:11px;margin:8px 0 0;line-height:1.35;">No hours column detected on Bobbot_History; hour totals stay at zero.</p>`
-      : '';
+/** One column: sales group × hours for approved or denied (`pto_week_*` from `/api/bobbot`). */
+function htmlPtoWeekRollupCol(week, hoursKey, hoursColTitle, colHeading, emptyNoRows, emptyNoHoursPrefix) {
+  if (!week || typeof week !== 'object') {
+    return `<div class="idle-split-col"><div class="idle-split-heading">${escapeHtml(colHeading)}</div><p class="panel-muted" style="margin-top:6px;">No data.</p></div>`;
+  }
 
   const rowsMatched = Number(week.rows_matched) || 0;
-  const groupsPositive = (week.by_group || []).filter((r) => Number(r.approved_hours) > 0);
+  const groupsPositive = (week.by_group || []).filter((r) => Number(r[hoursKey]) > 0);
   const totalH = Number(week.total_hours) || 0;
 
   let inner = '';
   if (rowsMatched === 0) {
-    inner = `<p class="panel-muted" style="margin-top:6px;line-height:1.4;">No approved PTO dated this Sun–Sat week (Central).</p>`;
+    inner = `<p class="panel-muted" style="margin-top:6px;line-height:1.4;">${escapeHtml(emptyNoRows)}</p>`;
   } else if (!groupsPositive.length || totalH <= 0) {
     const miss =
       typeof week.rows_missing_hours_value === 'number' && week.rows_missing_hours_value > 0
         ? ` ${week.rows_missing_hours_value} row(s) missing hour values.`
         : '';
-    inner = `<p class="panel-muted" style="margin-top:6px;line-height:1.4;">Approved decisions this week (${rowsMatched}), but no hours summed.${miss}</p>${warnMissingCol}`;
+    inner = `<p class="panel-muted" style="margin-top:6px;line-height:1.4;">${escapeHtml(emptyNoHoursPrefix)} (${rowsMatched}).${miss}</p>`;
   } else {
-    const thead =
-      '<thead><tr><th>Sales group</th><th class="num">Approved h</th></tr></thead>';
+    const thead = `<thead><tr><th>Sales group</th><th class="num">${escapeHtml(hoursColTitle)}</th></tr></thead>`;
     const tbody = groupsPositive
       .map(
         (r) =>
-          `<tr><td>${escapeHtml(String(r.group))}</td><td class="num">${formatHoursDisplay(r.approved_hours)}</td></tr>`
+          `<tr><td>${escapeHtml(String(r.group))}</td><td class="num">${formatHoursDisplay(r[hoursKey])}</td></tr>`
       )
       .join('');
     const foot = `<tfoot><tr class="rollup-sum-row"><td>Total</td><td class="num">${formatHoursDisplay(totalH)}</td></tr></tfoot>`;
-    inner = `<div class="preview-table-wrap"><table class="preview-table rollup-table">${thead}<tbody>${tbody}</tbody>${foot}</table></div>${warnMissingCol}`;
+    inner = `<div class="preview-table-wrap"><table class="preview-table rollup-table">${thead}<tbody>${tbody}</tbody>${foot}</table></div>`;
   }
 
+  return `<div class="idle-split-col"><div class="idle-split-heading">${escapeHtml(colHeading)}</div>${inner}</div>`;
+}
+
+/** Sun–Sat CT week: approved and denied PTO hours side by side. */
+function htmlPtoWeekRollupSection(approved, denied, errMsg, configured) {
+  if (errMsg || configured === false) return '';
+  const appr = approved && typeof approved === 'object' ? approved : {};
+  const den = denied && typeof denied === 'object' ? denied : {};
+  const ref =
+    appr.week_start || appr.week_end || appr.label
+      ? appr
+      : den.week_start || den.week_end || den.label
+        ? den
+        : appr;
+
+  const meta =
+    ref.week_start && ref.week_end
+      ? `${fmtOtWarnDayCt(ref.week_start)} – ${fmtOtWarnDayCt(ref.week_end)} · Sun–Sat (CT)`
+      : ref.label
+        ? `${ref.label} · Sun–Sat (CT)`
+        : 'Sun–Sat · Central Time';
+
+  const warnMissingCol =
+    appr.hours_column_found === false || den.hours_column_found === false
+      ? `<p class="panel-muted" style="font-size:11px;margin:10px 0 0;line-height:1.35;">No hours column detected on Bobbot_History; hour totals stay at zero.</p>`
+      : '';
+
+  const left = htmlPtoWeekRollupCol(
+    appr,
+    'approved_hours',
+    'Approved h',
+    'Approved',
+    'No approved PTO dated this Sun–Sat week (Central).',
+    'Approved decisions this week, but no hours summed'
+  );
+  const right = htmlPtoWeekRollupCol(
+    den,
+    'denied_hours',
+    'Denied h',
+    'Denied',
+    'No denied PTO dated this Sun–Sat week (Central).',
+    'Denied decisions this week, but no hours summed'
+  );
+
   return `
-    <section class="pto-week-rollup" aria-labelledby="pto-week-approved-head">
-      <h3 class="idle-split-heading" id="pto-week-approved-head">Approved PTO this week</h3>
+    <section class="pto-week-rollup" aria-labelledby="pto-week-head">
+      <h3 class="idle-split-heading" id="pto-week-head">PTO this week</h3>
       <p class="panel-muted pto-week-meta">${escapeHtml(meta)}</p>
-      ${inner}
+      <div class="idle-split pto-week-split">${left}${right}</div>
+      ${warnMissingCol}
     </section>
   `;
 }
@@ -1131,7 +1165,7 @@ function bobbotPtoPanel(data, errMsg, idleData, idleErr) {
         </div>
         ${htmlBobbotReachoutsColumn(data, errMsg, idleData, idleErr)}
       </div>
-      ${htmlPtoWeekApprovedRollup(data.pto_week_approved, errMsg, data.configured)}
+      ${htmlPtoWeekRollupSection(data.pto_week_approved, data.pto_week_denied, errMsg, data.configured)}
     </div>
   `;
 }

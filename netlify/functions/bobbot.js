@@ -42,6 +42,18 @@ function isApprovedDecision(headers, row) {
   return raw === 'APPROVED' || raw.startsWith('APPROVED ') || raw.includes('APPROVED');
 }
 
+/** Denied PTO requests only (excludes cancelled). Other outcomes (e.g. call-out) are not counted as denied. */
+function isDeniedDecision(headers, row) {
+  const di = decisionColumnIndex(headers);
+  if (di < 0) return false;
+  const raw = String(row[di] ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, ' ');
+  if (!raw || raw === 'CANCELLED' || raw === 'CANCELED') return false;
+  return raw === 'DENIED' || raw.startsWith('DENIED ');
+}
+
 function rowMatchesAnyDate(row, dateCols, pred) {
   for (const ci of dateCols) {
     const ymd = normalizeDateCell(row[ci]);
@@ -111,9 +123,9 @@ function parseHoursCell(cell) {
 }
 
 /**
- * Sun–Sat week in CT: rows where any request_date matches the range, decision is approved, not cancelled.
+ * Sun–Sat week in CT: rows where any request_date matches the range and decision predicate passes (not cancelled).
  */
-function buildPtoWeekApprovedByGroup(headers, rows, dateCols, weekStartYmd, weekEndYmd) {
+function buildPtoWeekHoursByGroup(headers, rows, dateCols, weekStartYmd, weekEndYmd, decisionPred) {
   const queueI = salesGroupColumnIndex(headers);
   const hoursI = hoursColumnIndex(headers);
   const map = new Map();
@@ -125,7 +137,7 @@ function buildPtoWeekApprovedByGroup(headers, rows, dateCols, weekStartYmd, week
     if (!rowMatchesAnyDate(row, dateCols, (ymd) => ymd >= weekStartYmd && ymd <= weekEndYmd)) {
       continue;
     }
-    if (!isApprovedDecision(headers, row)) continue;
+    if (!decisionPred(headers, row)) continue;
     rows_matched += 1;
     const g = queueI >= 0 ? String(row[queueI] ?? '').trim() : '';
     const groupLabel = g || '—';
@@ -139,13 +151,13 @@ function buildPtoWeekApprovedByGroup(headers, rows, dateCols, weekStartYmd, week
   }
 
   const by_group = [...map.entries()]
-    .map(([group, approved_hours]) => ({
+    .map(([group, hours]) => ({
       group,
-      approved_hours: Math.round(approved_hours * 100) / 100,
+      hours: Math.round(hours * 100) / 100,
     }))
     .sort((a, b) => a.group.localeCompare(b.group));
 
-  const total_hours = Math.round(by_group.reduce((s, r) => s + r.approved_hours, 0) * 100) / 100;
+  const total_hours = Math.round(by_group.reduce((s, r) => s + r.hours, 0) * 100) / 100;
 
   return {
     week_start: weekStartYmd,
@@ -178,15 +190,32 @@ exports.handler = async (event) => {
     const nCancelled = rowsToday.length - rowsVisible.length;
 
     const weekMeta = currentChicagoWeekSundayToSaturday();
+    const approvedBase = buildPtoWeekHoursByGroup(
+      headers,
+      rows,
+      dateColsForMatch,
+      weekMeta.week_start,
+      weekMeta.week_end,
+      isApprovedDecision
+    );
+    const deniedBase = buildPtoWeekHoursByGroup(
+      headers,
+      rows,
+      dateColsForMatch,
+      weekMeta.week_start,
+      weekMeta.week_end,
+      isDeniedDecision
+    );
+
     const pto_week_approved = {
-      ...buildPtoWeekApprovedByGroup(
-        headers,
-        rows,
-        dateColsForMatch,
-        weekMeta.week_start,
-        weekMeta.week_end
-      ),
+      ...approvedBase,
       label: weekMeta.label,
+      by_group: approvedBase.by_group.map(({ group, hours }) => ({ group, approved_hours: hours })),
+    };
+    const pto_week_denied = {
+      ...deniedBase,
+      label: weekMeta.label,
+      by_group: deniedBase.by_group.map(({ group, hours }) => ({ group, denied_hours: hours })),
     };
 
     const sheet_source_note = [
@@ -213,8 +242,9 @@ exports.handler = async (event) => {
         headers,
         /** All decision rows for request_date today except CANCELLED/CANCELED (preview cap). */
         rows_preview: rowsVisible.slice(0, 80),
-        /** Approved PTO hours rolled up by sales group for current Sun–Sat week (CT). */
+        /** Approved / denied PTO hours by sales group for current Sun–Sat week (CT). */
         pto_week_approved,
+        pto_week_denied,
         fetched_at: new Date().toISOString(),
       },
       CACHE_SEC
