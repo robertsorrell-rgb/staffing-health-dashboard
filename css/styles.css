@@ -169,35 +169,42 @@ body {
 }
 
 .idle-split {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 28px;
   margin-top: 12px;
-  align-items: start;
-}
-@media (max-width: 800px) {
-  .idle-split {
-    grid-template-columns: 1fr;
-  }
-  .idle-split-col {
-    padding-left: 0;
-    border-left: none;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-str);
-  }
-  .idle-split-col:first-child {
-    padding-top: 0;
-    border-top: none;
-  }
 }
 .idle-split-col {
+  flex: 1 1 0;
   min-width: 0;
-  padding-left: 14px;
+  padding-left: 18px;
   border-left: 1px solid var(--border-str);
 }
 .idle-split-col:first-child {
   padding-left: 0;
   border-left: none;
+}
+/** Keep columns side-by-side; scroll horizontally if the card is too narrow. */
+@media (max-width: 640px) {
+  .idle-split {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 20px;
+    padding-bottom: 6px;
+    margin-right: -4px;
+  }
+  .idle-split-col {
+    flex: 0 0 min(280px, calc(100vw - 72px));
+    min-width: min(280px, calc(100vw - 72px));
+    padding-left: 18px;
+    border-left: 1px solid var(--border-str);
+  }
+  .idle-split-col:first-child {
+    padding-left: 0;
+    border-left: none;
+  }
 }
 .idle-split-heading {
   font-size: 11px;
