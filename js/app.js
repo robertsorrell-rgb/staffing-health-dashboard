@@ -269,13 +269,13 @@ function renderSparkline(container, spark) {
   const defined = vals.filter((v) => v != null);
   if (!defined.length) return;
 
-  const w = 720;
-  const chartH = 92;
-  const axisH = 34;
-  const padX = 14;
+  const w = 560;
+  const chartH = 68;
+  const axisH = 28;
+  const padX = 12;
   /** Left gutter for % axis labels */
-  const padYL = 44;
-  const padTop = 12;
+  const padYL = 36;
+  const padTop = 10;
   const totalH = padTop + chartH + axisH;
   const plotRight = w - padX;
   const plotW = plotRight - padYL;
@@ -379,7 +379,7 @@ function renderSparkline(container, spark) {
     svg.appendChild(grid);
   }
 
-  const strokeW = 2.85;
+  const strokeW = 2.35;
   if (pts.length >= 2) {
     for (let si = 0; si < pts.length - 1; si++) {
       const a = pts[si];
@@ -398,7 +398,7 @@ function renderSparkline(container, spark) {
     const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     dot.setAttribute('cx', String(pts[0].x));
     dot.setAttribute('cy', String(pts[0].y));
-    dot.setAttribute('r', '4');
+    dot.setAttribute('r', '3.25');
     dot.setAttribute('fill', idleSparkColorHex(pts[0].v));
     dot.setAttribute('stroke', '#fff');
     dot.setAttribute('stroke-width', '0.75');

@@ -170,29 +170,13 @@ body {
   grid-template-columns: 1fr;
 }
 
-#panel-idle.panel-card {
-  padding: 22px 26px 28px;
-}
-#panel-idle .panel-title {
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  margin-bottom: 12px;
-}
-#panel-idle .panel-sub {
-  font-size: 13px;
-}
-#panel-idle .panel-kpi.idle-split-kpi {
-  font-size: clamp(28px, 5.5vw, 44px);
-  line-height: 1.12;
-}
-
 .idle-split {
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
   align-items: flex-start;
-  gap: 36px;
-  margin-top: 18px;
+  gap: 28px;
+  margin-top: 12px;
 }
 .idle-split-col {
   flex: 1 1 0;
@@ -225,12 +209,15 @@ body {
   }
 }
 .idle-split-heading {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--navy);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+}
+.idle-split-kpi {
+  font-size: clamp(22px, 4vw, 32px);
 }
 .idle-parse-note {
   margin: 10px 0 0;
@@ -239,14 +226,14 @@ body {
 
 /* Idle breakdown: banded emphasis on % */
 .idle-group-list {
-  margin: 10px 0 0 18px;
+  margin: 8px 0 0 16px;
   padding: 0;
-  font-size: 14px;
+  font-size: 12px;
   list-style: disc;
 }
 .idle-group-list li {
-  margin: 6px 0;
-  padding: 6px 12px 6px 4px;
+  margin: 5px 0;
+  padding: 5px 10px 5px 4px;
   margin-left: -6px;
   border-radius: var(--radius);
 }
@@ -265,21 +252,21 @@ body {
 }
 .panel-kpi.idle-split-kpi.idle-pct-yellow {
   display: inline-block;
-  padding: 8px 14px;
+  padding: 6px 12px;
   border-radius: var(--radius);
   background: var(--amber-bg);
   color: var(--text-pri);
 }
 .panel-kpi.idle-split-kpi.idle-pct-orange {
   display: inline-block;
-  padding: 8px 14px;
+  padding: 6px 12px;
   border-radius: var(--radius);
   background: var(--idle-orange-bg);
   color: var(--idle-orange-fg);
 }
 .panel-kpi.idle-split-kpi.idle-pct-red {
   display: inline-block;
-  padding: 8px 14px;
+  padding: 6px 12px;
   border-radius: var(--radius);
   background: var(--red-bg);
   color: var(--red);
@@ -483,7 +470,7 @@ a.digest-link {
 }
 
 .sparkline-wrap {
-  margin-top: 12px;
+  margin-top: 10px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -491,7 +478,7 @@ a.digest-link {
 }
 .sparkline-svg {
   width: 100%;
-  max-width: 820px;
+  max-width: 640px;
   height: auto;
   display: block;
 }
@@ -507,7 +494,7 @@ a.digest-link {
 }
 .sparkline-y-label {
   fill: var(--text-sec);
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--font-mono);
 }
 .sparkline-tick {
@@ -516,12 +503,12 @@ a.digest-link {
 }
 .sparkline-hour-label {
   fill: var(--text-sec);
-  font-size: 12px;
+  font-size: 10.5px;
   font-family: var(--font-mono);
 }
 .sparkline-axis-caption {
-  margin-top: 6px;
-  font-size: 11px;
+  margin-top: 4px;
+  font-size: 10px;
   font-weight: 500;
   color: var(--text-sec);
   letter-spacing: 0.03em;
