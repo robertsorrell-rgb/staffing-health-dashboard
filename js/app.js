@@ -393,8 +393,6 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
   const sum = data.summary || {};
   const autoSummary = autoPanel.summary || {};
 
-  const rowsAuto =
-    sum.rows_auto_today ?? autoSummary.rows_today ?? 0;
   const hoursTargeted = sum.hours_targeted_from_offers ?? rollup.total_hours ?? 0;
   const hoursAuto =
     sum.hours_auto_approved ?? auto.hours_approved_today ?? autoSummary.hours_approved_today ?? 0;
@@ -416,14 +414,11 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     }
 
     body += `<section class="vto-scope vto-scope-today" aria-labelledby="vto-head-today">`;
-    body += `<h3 class="vto-period-title" id="vto-head-today"><span class="vto-period-label">Today</span><span class="vto-period-meta">Central calendar · Offers COMMITTED + automated Decision = Approved</span></h3>`;
+    body += `<h3 class="vto-period-title" id="vto-head-today"><span class="vto-period-label">Today</span></h3>`;
     body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursCombined)} h</strong></div>`;
 
     if (typeof rollup.rows_missing_hours === 'number' && rollup.rows_missing_hours > 0) {
       body += `<p class="panel-muted rollup-missing">${rollup.rows_missing_hours} COMMITTED offer row(s) missing hour value.</p>`;
-    }
-    if (typeof auto.approved_today === 'number' && auto.approved_today === 0 && rowsAuto > 0) {
-      body += `<p class="panel-muted rollup-missing">Requests_Submissions rows found today, but none had Decision = Approved.</p>`;
     }
 
     body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combined.by_group || []), 'By sales group');
