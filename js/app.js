@@ -33,6 +33,51 @@ const PREVIEW_CALLOUT = {
   maxCols: 6,
 };
 
+/** Sheet group names → one dashboard row (simple mean of listed %); CSR omitted. */
+const IDLE_MERGE_SPECS = [
+  { label: 'Adult Learning', sources: ['Core Test Group', 'Languages Test Group'] },
+  { label: 'High School', sources: ['STEM High School Test Group', 'K12 Test Prep'] },
+  { label: 'ELD', sources: ['K-6 Test Group', 'Learning Differences Test Group'] },
+  { label: 'College', sources: ['STEM College Test Group', 'Graduate Test Prep'] },
+];
+
+function normalizeIdleGroupName(name) {
+  return String(name ?? '').trim().toLowerCase();
+}
+
+function averageIdlePercents(pcts) {
+  const nums = pcts.filter((v) => v != null && !Number.isNaN(Number(v))).map((v) => Number(v));
+  if (!nums.length) return null;
+  return Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10;
+}
+
+/** @param {Record<string, number|null|undefined>} rawMap */
+function mergeIdleGroupBreakdown(rawMap) {
+  if (!rawMap || typeof rawMap !== 'object') return {};
+  const src = { ...rawMap };
+  const consumed = new Set();
+  const out = {};
+
+  for (const spec of IDLE_MERGE_SPECS) {
+    const vals = spec.sources.map((key) => src[key]);
+    const merged = averageIdlePercents(vals);
+    if (merged != null) out[spec.label] = merged;
+    for (const key of spec.sources) consumed.add(key);
+  }
+
+  for (const [name, pct] of Object.entries(src)) {
+    if (consumed.has(name)) continue;
+    if (normalizeIdleGroupName(name) === 'csr') continue;
+    out[name] = pct == null || Number.isNaN(Number(pct)) ? null : Number(pct);
+  }
+  return out;
+}
+
+function sortedIdleGroupEntries(rawMap) {
+  const merged = mergeIdleGroupBreakdown(rawMap);
+  return Object.entries(merged).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+}
+
 function formatTime(iso) {
   if (!iso) return '—';
   try {
@@ -685,7 +730,7 @@ async function loadAll() {
       const gh = idle?.groups_by_hour;
       const ch = idle?.kpi_hour ?? idle?.ct_current_hour;
       if (gh && ch != null && gh[String(ch)]) {
-        const entries = Object.entries(gh[String(ch)]).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+        const entries = sortedIdleGroupEntries(gh[String(ch)]);
         idleHourGroups.innerHTML = idleGroupListHtml(entries, 'By group (this hour)');
       } else idleHourGroups.innerHTML = '';
 
@@ -694,7 +739,7 @@ async function loadAll() {
 
       const gd = idle?.groups_by_day;
       if (gd && Object.keys(gd).length) {
-        const entries = Object.entries(gd).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+        const entries = sortedIdleGroupEntries(gd);
         idleDayGroups.innerHTML = idleGroupListHtml(entries, 'By group (full day)');
       } else idleDayGroups.innerHTML = '';
     }
