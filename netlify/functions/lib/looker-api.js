@@ -79,6 +79,74 @@ async function lookerLogin(baseUrl, clientId, clientSecret) {
  * @param {string|number} queryId
  * @returns {Promise<unknown>}
  */
+/**
+ * @param {string} baseUrl
+ * @param {string} token
+ * @param {string|number} queryId
+ * @returns {Promise<Record<string, unknown>>}
+ */
+async function lookerGetQuery(baseUrl, token, queryId) {
+  const root = normalizeBaseUrl(baseUrl);
+  const id = encodeURIComponent(String(queryId).trim());
+  const url = `${root}/api/${apiVersion()}/queries/${id}`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `token ${token}` },
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error(`Looker query ${id} GET failed (${res.status}): ${text.slice(0, 500)}`);
+    err.statusCode = res.status >= 400 && res.status < 600 ? res.status : 502;
+    throw err;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const err = new Error('Looker query GET returned non-JSON');
+    err.statusCode = 502;
+    throw err;
+  }
+}
+
+/**
+ * Create a new query (immutable writes — returns existing identical query when deduped).
+ * @param {string} baseUrl
+ * @param {string} token
+ * @param {Record<string, unknown>} writeQueryBody
+ * @returns {Promise<Record<string, unknown>>}
+ */
+async function lookerCreateQuery(baseUrl, token, writeQueryBody) {
+  const root = normalizeBaseUrl(baseUrl);
+  const url = `${root}/api/${apiVersion()}/queries`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `token ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(writeQueryBody),
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error(`Looker create query failed (${res.status}): ${text.slice(0, 700)}`);
+    err.statusCode = res.status >= 400 && res.status < 600 ? res.status : 502;
+    throw err;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const err = new Error('Looker create query returned non-JSON');
+    err.statusCode = 502;
+    throw err;
+  }
+}
+
 async function lookerRunQueryJson(baseUrl, token, queryId) {
   const root = normalizeBaseUrl(baseUrl);
   const id = encodeURIComponent(String(queryId).trim());
@@ -169,6 +237,8 @@ function lookerRunJsonToHeaderRows(data) {
 
 module.exports = {
   lookerLogin,
+  lookerGetQuery,
+  lookerCreateQuery,
   lookerRunQueryJson,
   lookerRunLookJson,
   lookerRunJsonToHeaderRows,

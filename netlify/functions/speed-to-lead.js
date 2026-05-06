@@ -101,13 +101,24 @@ function findDateColumnIndex(headers) {
   const lower = headers.map((h) => String(h || '').trim().toLowerCase());
   for (let i = 0; i < lower.length; i++) {
     const h = lower[i];
+    if (h.includes('created_at_date')) return i;
+    if (h.includes('lead_date') || h.includes('lead date')) return i;
+    if (h.includes('event_date') || h.includes('event date')) return i;
+  }
+  for (let i = 0; i < lower.length; i++) {
+    const h = lower[i];
     if (h === 'date') return i;
     if (h.includes('calendar')) return i;
     if (/\btimestamp\b/.test(h)) return i;
-    if (h.includes('lead_date') || h.includes('lead date')) return i;
-    if (h.includes('created') && (h.includes('date') || h.includes('at'))) return i;
-    if (h.includes('event_date') || h.includes('event date')) return i;
     if (h === 'day' || /(^|\s)day(\s|$)/.test(h)) return i;
+    if (
+      h.includes('created') &&
+      h.includes('date') &&
+      !/_hour\b/.test(h) &&
+      !h.includes('hour_of_day')
+    ) {
+      return i;
+    }
   }
   return -1;
 }
@@ -185,12 +196,16 @@ function inferSpeedMinutesColumnFromRows(headers, rows) {
       const row = rows[r];
       if (!Array.isArray(row) || row.length <= i) continue;
       const cell = row[i];
-      const ymd = normalizeDateCell(cell);
-      if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+      // normalizeDateCell treats finite numbers as Excel serial days — skip for numeric cells
+      // so small integers (Looker counts) are not mis-read as calendar dates.
+      if (typeof cell !== 'number' || !Number.isFinite(cell)) {
+        const ymd = normalizeDateCell(cell);
+        if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+      }
       const m = parseMinutes(cell);
       if (m != null && m >= 0.5 && m <= STL_INFER_MAX_MIN) nums.push(m);
     }
-    const need = Math.max(2, Math.ceil(sampleN * 0.25));
+    const need = Math.max(2, Math.ceil(sampleN * 0.15));
     if (nums.length < need) continue;
     const med = median(nums);
     if (med == null || med < 1 || med > 7200) continue;
