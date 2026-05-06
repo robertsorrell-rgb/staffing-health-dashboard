@@ -50,6 +50,8 @@ const DEFAULTS = {
   ASSEMBLED_OP_START_MINUTE: '420',
   ASSEMBLED_OP_END_MINUTE: '1320',
   ASSEMBLED_API_BASE: 'https://api.assembledhq.com/v0',
+  /** Staffing timeline “Net staffing” row matches scheduled − forecasted required more often than raw staffing_net. Override with `api` for Targeted VTO bot parity. */
+  ASSEMBLED_NET_COMPUTE: 'timeline',
 };
 
 /**

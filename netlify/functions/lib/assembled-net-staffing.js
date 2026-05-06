@@ -224,9 +224,11 @@ async function assembledFetch(apiBase, apiKey, path, params) {
   const qs = keys.map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(params[k]))}`).join('&');
   const url = `${apiBase}${path}${qs ? `?${qs}` : ''}`;
   const auth = Buffer.from(`${apiKey}:`, 'utf8').toString('base64');
+  const apiVer = (env('ASSEMBLED_API_VERSION') || '').trim();
   const headers = {
     Authorization: `Basic ${auth}`,
     'Content-Type': 'application/json',
+    ...(apiVer ? { 'API-Version': apiVer } : {}),
   };
 
   const maxAttempts = assembled429MaxAttempts();
@@ -401,15 +403,19 @@ function parseNonNegMinute(name, fallback) {
 
 /**
  * Which field drives “net” per 30‑min interval.
- * Default `api` matches **Targeted VTO bot** (`rvtoFindDeficits_`): numeric staffing_net, else scheduled − staffing_required.forecasted only.
+ * `timeline` → scheduled − forecasted (Staffing timeline grid when net = sched − required forecast).
+ * `api` → staffing_net when numeric, else scheduled − forecasted (**Targeted VTO bot**).
  */
 function netComputeMode() {
-  let m = (env('ASSEMBLED_NET_COMPUTE') || 'api').trim().toLowerCase().replace(/-/g, '_');
+  let m = env('ASSEMBLED_NET_COMPUTE').trim().toLowerCase().replace(/-/g, '_');
+  if (!m) m = 'timeline';
   if (m === 'scheduled_minus_actual') m = 'sched_minus_actual';
   if (m === 'scheduled_minus_forecasted') m = 'sched_minus_forecasted';
+  if (m === 'timeline' || m === 'staffing_timeline') return 'sched_minus_forecasted';
   if (m === 'api' || m === 'assembled' || m === 'vto_bot') return 'api';
   if (m === 'sched_minus_forecasted') return 'sched_minus_forecasted';
-  return 'sched_minus_actual';
+  if (m === 'sched_minus_actual') return 'sched_minus_actual';
+  return 'sched_minus_forecasted';
 }
 
 /** One interval’s net staffing (people-style), before hourly rollup. */
@@ -506,7 +512,12 @@ async function pullForecastBuckets({
         qParams.site_id = siteId;
         qParams.site = siteId;
       }
-      if (scheduleId) qParams.schedule_id = scheduleId;
+      if (scheduleId) {
+        qParams.schedule_id = scheduleId;
+        if (['1', 'true', 'yes'].includes(String(env('ASSEMBLED_FORECAST_DUP_SCHEDULE_PARAM') || '').trim().toLowerCase())) {
+          qParams.schedule = scheduleId;
+        }
+      }
 
       const res = await assembledFetch(apiBase, apiKey, '/forecasted_vs_actuals', qParams);
       const intervals = res.forecasts_vs_actuals || res.forecasted_vs_actuals || [];
@@ -781,6 +792,11 @@ async function loadNetStaffingFromAssembled() {
         'No schedule_id: Assembled defaults to **master schedule**. Timeline “Default Schedule” usually needs ASSEMBLED_SCHEDULE_ID or auto-resolve (ASSEMBLED_SCHEDULE_MATCH_NAME).'
       );
     }
+    if (scheduleId) {
+      parts.push(
+        `Using schedule_id prefix **${scheduleId.slice(0, 8)}**… (must match Staffing timeline URL). Try ASSEMBLED_API_VERSION if schedule filter seems ignored.`
+      );
+    }
     const slotsPerHour = 3600 / intervalSec;
     const rollupLab =
       rollup === 'sum'
@@ -791,12 +807,14 @@ async function loadNetStaffingFromAssembled() {
     );
     if (netMode === 'api') {
       parts.push(
-        'Net per 30‑min interval: staffing_net when present, else scheduled − staffing_required.forecasted (Targeted VTO bot).'
+        'Net per 30‑min interval: staffing_net when present, else scheduled − staffing_required.forecasted (Targeted VTO bot / Surplus). If the timeline “Net” row is still off, use ASSEMBLED_NET_COMPUTE=timeline.'
+      );
+    } else if (netMode === 'sched_minus_forecasted') {
+      parts.push(
+        'Net per 30‑min interval: **scheduled − staffing_required.forecasted** (typical Staffing timeline net row). For VTO bot parity set ASSEMBLED_NET_COMPUTE=api.'
       );
     } else {
-      parts.push(
-        `Net per interval: ${netMode}. For bot parity use ASSEMBLED_NET_COMPUTE=api.`
-      );
+      parts.push(`Net per interval: ${netMode} (set ASSEMBLED_NET_COMPUTE=timeline or api as needed).`);
     }
     assembledNoteOk = parts.join(' ');
   }

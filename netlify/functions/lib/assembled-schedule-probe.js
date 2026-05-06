@@ -94,12 +94,14 @@ function graphqlCollectScheduleLikeNodes(data) {
 
 async function assembledGraphqlQuery(apiBase, apiKey, query) {
   const auth = Buffer.from(`${apiKey}:`, 'utf8').toString('base64');
+  const apiVer = String(process.env.ASSEMBLED_API_VERSION || '').trim();
   const url = `${apiBase.replace(/\/$/, '')}/graphql`;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${auth}`,
       'Content-Type': 'application/json',
+      ...(apiVer ? { 'API-Version': apiVer } : {}),
     },
     body: JSON.stringify({ query }),
   });

@@ -49,8 +49,14 @@ if (!apiKey) {
 
 async function restGet(path) {
   const auth = Buffer.from(`${apiKey}:`, 'utf8').toString('base64');
+  const apiVer = String(process.env.ASSEMBLED_API_VERSION || '').trim();
   const url = `${apiBase}${path}`;
-  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Basic ${auth}`,
+      ...(apiVer ? { 'API-Version': apiVer } : {}),
+    },
+  });
   const text = await res.text();
   let json = null;
   try {
