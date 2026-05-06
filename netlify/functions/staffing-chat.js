@@ -333,9 +333,10 @@ exports.handler = async (event) => {
   try {
     let out;
     if (provider.name === 'gemini') {
+      // Default avoids gemini-2.0-flash: deprecated (free tier often quota 0 near shutdown — May/June 2026).
       const model =
-        String(process.env.STAFFING_CHAT_GEMINI_MODEL || 'gemini-2.0-flash').trim() ||
-        'gemini-2.0-flash';
+        String(process.env.STAFFING_CHAT_GEMINI_MODEL || 'gemini-2.5-flash').trim() ||
+        'gemini-2.5-flash';
       out = await completeWithGemini(systemPrompt, clean, provider.geminiKey, model);
     } else if (provider.name === 'anthropic') {
       const model =
