@@ -255,14 +255,20 @@ function formatHeatmapNetStaffingNumber(d) {
 function setNetStaffingSourceBanner(payload) {
   const el = document.getElementById('net-staffing-source-banner');
   if (!el || !payload) return;
-  const parts = [];
-  if (payload.assembled_skipped_reason) parts.push(payload.assembled_skipped_reason);
-  if (payload.assembled_fallback_reason) parts.push(payload.assembled_fallback_reason);
-  if (parts.length) {
+  const warns = [];
+  if (payload.assembled_skipped_reason) warns.push(payload.assembled_skipped_reason);
+  if (payload.assembled_fallback_reason) warns.push(payload.assembled_fallback_reason);
+  const info = payload.assembled_note ? String(payload.assembled_note).trim() : '';
+  if (warns.length) {
     el.hidden = false;
-    el.textContent = parts.join(' ');
+    el.textContent = info ? `${warns.join(' ')} ${info}` : warns.join(' ');
     el.style.fontWeight = '600';
     el.style.color = 'var(--amber)';
+  } else if (info) {
+    el.hidden = false;
+    el.textContent = info;
+    el.style.fontWeight = '';
+    el.style.color = 'var(--text-sec)';
   } else {
     el.hidden = true;
     el.textContent = '';

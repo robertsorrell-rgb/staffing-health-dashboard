@@ -176,41 +176,25 @@ function hourFromUnix(sec) {
 }
 
 /**
- * @returns {Promise<{ ok: boolean, matrix: object[], hours: number[], source: string, fetched_at: string, note?: string } | null>}
+ * Paginate forecasted_vs_actuals per queue and fill hourly buckets (half-hours rolled later).
+ * @returns {Promise<Record<string, Record<string, { sum: number, n: number }>>>}
  */
-async function loadNetStaffingFromAssembled() {
-  const apiKey = env('ASSEMBLED_API_KEY');
-  if (!apiKey) return null;
-
-  const apiBase = (env('ASSEMBLED_API_BASE') || API_BASE_DEFAULT).replace(/\/$/, '');
-  const siteName = env('ASSEMBLED_SITE_NAME') || 'Consumer Sales';
-  const channel = env('ASSEMBLED_CHANNEL') || 'phone';
-  const intervalSec = parseInt(env('ASSEMBLED_INTERVAL_SECONDS'), 10);
-  const pageSize = parseInt(env('ASSEMBLED_PAGE_SIZE'), 10);
-  const opStartMin = parseInt(env('ASSEMBLED_OP_START_MINUTE'), 10);
-  const opEndMin = parseInt(env('ASSEMBLED_OP_END_MINUTE'), 10);
-
-  const capMap = activeCapQueueMap();
-  const queueNames = capMap.map((q) => q.queue);
-  const sitesRes = await assembledFetch(apiBase, apiKey, '/sites', {});
-  const queuesRes = await assembledFetch(apiBase, apiKey, '/queues', {});
-  const siteId = resolveSiteId(sitesRes, siteName);
-  const queueIdMap = resolveQueueIds(queuesRes, queueNames);
-  const missingQueueNames = queueNames.filter((q) => !queueIdMap[q]);
-
-  const rollup = hourRollupMode();
-
-  const dateIso = todayIsoCt();
-  const dayStartMs = chicagoMidnightUtcMs(dateIso);
-  const opStartMs = dayStartMs + opStartMin * 60000;
-  const opEndMs = dayStartMs + opEndMin * 60000;
-  let startSec = Math.floor(opStartMs / 1000);
-  let endSec = Math.floor(opEndMs / 1000);
-  ({ startSec, endSec } = alignForecastWindowSec(startSec, endSec, intervalSec));
-
-  const skipSite = skipSiteOnForecastedQuery();
-
-  /** label -> hour -> { sum } */
+async function pullForecastBuckets({
+  apiBase,
+  apiKey,
+  capMap,
+  queueIdMap,
+  startSec,
+  endSec,
+  intervalSec,
+  channel,
+  siteId,
+  omitSiteFilter,
+  pageSize,
+  dateIso,
+  opStartMin,
+  opEndMin,
+}) {
   const buckets = {};
   for (const q of capMap) buckets[q.label] = {};
 
@@ -230,8 +214,7 @@ async function loadNetStaffingFromAssembled() {
         limit: pageSize,
         offset,
       };
-      /** Docs list queue/channel/times; site filter uses `site_id` (legacy `site` was ignored on some tenants). */
-      if (!skipSite && siteId) qParams.site_id = siteId;
+      if (!omitSiteFilter && siteId) qParams.site_id = siteId;
 
       const res = await assembledFetch(apiBase, apiKey, '/forecasted_vs_actuals', qParams);
       const intervals = res.forecasts_vs_actuals || res.forecasted_vs_actuals || [];
@@ -240,7 +223,7 @@ async function loadNetStaffingFromAssembled() {
         console.warn('[assembled-net-staffing] forecasted_vs_actuals empty page', {
           queue: qDef.queue,
           reportedTotal: res.total,
-          skipSiteFilter: skipSite,
+          omitSiteFilter,
         });
       }
       for (const it of intervals) {
@@ -261,7 +244,6 @@ async function loadNetStaffingFromAssembled() {
           it.staffing_net != null && it.staffing_net !== '' ? Number(it.staffing_net) : scheduled - required;
         if (!Number.isFinite(net)) continue;
 
-        /** Bucket intervals per clock hour; rollup sum vs avg applied when building matrix. */
         const b = buckets[qDef.label];
         if (!b[hr]) b[hr] = { sum: 0, n: 0 };
         b[hr].sum += net;
@@ -273,13 +255,16 @@ async function loadNetStaffingFromAssembled() {
     }
   }
 
+  return buckets;
+}
+
+function matrixHoursFromBuckets(buckets, capMap, rollup) {
   buckets[AGGREGATE_LABEL] = {};
   const aggregateLabels = capMap.map((q) => q.label);
   const hourSetAgg = new Set();
   for (const lbl of aggregateLabels) {
     for (const hr of Object.keys(buckets[lbl] || {})) hourSetAgg.add(parseInt(hr, 10));
   }
-  /** Aggregate row = sum of each queue’s hourly rolled-up net (matches multi-queue Assembled aggregate). */
   for (const hr of hourSetAgg) {
     let sumAgg = 0;
     let parts = 0;
@@ -318,18 +303,100 @@ async function loadNetStaffingFromAssembled() {
     if (Object.keys(hoursOut).length > 0) matrix.push({ group: label, hours: hoursOut });
   }
 
+  return { matrix, hours };
+}
+
+/**
+ * @returns {Promise<{ ok: boolean, matrix: object[], hours: number[], source: string, fetched_at: string, note?: string } | null>}
+ */
+async function loadNetStaffingFromAssembled() {
+  const apiKey = env('ASSEMBLED_API_KEY');
+  if (!apiKey) return null;
+
+  const apiBase = (env('ASSEMBLED_API_BASE') || API_BASE_DEFAULT).replace(/\/$/, '');
+  const siteName = env('ASSEMBLED_SITE_NAME') || 'Consumer Sales';
+  const channel = env('ASSEMBLED_CHANNEL') || 'phone';
+  const intervalSec = parseInt(env('ASSEMBLED_INTERVAL_SECONDS'), 10);
+  const pageSize = parseInt(env('ASSEMBLED_PAGE_SIZE'), 10);
+  const opStartMin = parseInt(env('ASSEMBLED_OP_START_MINUTE'), 10);
+  const opEndMin = parseInt(env('ASSEMBLED_OP_END_MINUTE'), 10);
+
+  const capMap = activeCapQueueMap();
+  const queueNames = capMap.map((q) => q.queue);
+  const sitesRes = await assembledFetch(apiBase, apiKey, '/sites', {});
+  const queuesRes = await assembledFetch(apiBase, apiKey, '/queues', {});
+  const siteId = resolveSiteId(sitesRes, siteName);
+  const queueIdMap = resolveQueueIds(queuesRes, queueNames);
+  const missingQueueNames = queueNames.filter((q) => !queueIdMap[q]);
+
+  const rollup = hourRollupMode();
+
+  const dateIso = todayIsoCt();
+  const dayStartMs = chicagoMidnightUtcMs(dateIso);
+  const opStartMs = dayStartMs + opStartMin * 60000;
+  const opEndMs = dayStartMs + opEndMin * 60000;
+  let startSec = Math.floor(opStartMs / 1000);
+  let endSec = Math.floor(opEndMs / 1000);
+  ({ startSec, endSec } = alignForecastWindowSec(startSec, endSec, intervalSec));
+
+  const envSkipSite = skipSiteOnForecastedQuery();
+
+  let buckets = await pullForecastBuckets({
+    apiBase,
+    apiKey,
+    capMap,
+    queueIdMap,
+    startSec,
+    endSec,
+    intervalSec,
+    channel,
+    siteId,
+    omitSiteFilter: envSkipSite,
+    pageSize,
+    dateIso,
+    opStartMin,
+    opEndMin,
+  });
+
+  let { matrix, hours } = matrixHoursFromBuckets(buckets, capMap, rollup);
+  /** If site-scoped pull is empty, retry once without site_id (common on Netlify / multi-site tenants). */
+  let assembledOmitSiteAuto = false;
+  if (matrix.length === 0 && !envSkipSite && missingQueueNames.length === 0) {
+    buckets = await pullForecastBuckets({
+      apiBase,
+      apiKey,
+      capMap,
+      queueIdMap,
+      startSec,
+      endSec,
+      intervalSec,
+      channel,
+      siteId,
+      omitSiteFilter: true,
+      pageSize,
+      dateIso,
+      opStartMin,
+      opEndMin,
+    });
+    ({ matrix, hours } = matrixHoursFromBuckets(buckets, capMap, rollup));
+    assembledOmitSiteAuto = matrix.length > 0;
+  }
+
   let emptyNote;
+  let assembledNoteOk;
   if (matrix.length === 0) {
     if (missingQueueNames.length) {
       emptyNote = `Assembled has no matching queues for: ${missingQueueNames.join(
         ', '
       )}. Names must match Assembled (see CAP_QUEUE_MAP / ASSEMBLED_NET_STAFFING_QUEUES). Site “${siteName}”, channel “${channel}”.`;
     } else {
-      const siteHint = skipSite
+      const siteHint = envSkipSite
         ? 'site filter off (ASSEMBLED_SKIP_SITE_FILTER)'
-        : `site “${siteName}” as site_id`;
-      emptyNote = `Assembled returned no usable interval rows for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — try ASSEMBLED_SKIP_SITE_FILTER=1 on Netlify if the Forecast vs Actual UI shows data without a site filter; otherwise confirm forecast/staffing exists for this date and API key permissions.`;
+        : `site “${siteName}” as site_id (auto-retry without site also returned no rows)`;
+      emptyNote = `Assembled returned no usable interval rows for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — confirm forecast/staffing exists for this date and API key permissions.`;
     }
+  } else if (assembledOmitSiteAuto) {
+    assembledNoteOk = `Assembled net staffing uses queue + channel only (no site_id); site-scoped API returned no rows.`;
   }
 
   return {
@@ -342,8 +409,10 @@ async function loadNetStaffingFromAssembled() {
     assembled_hour_rollup: rollup,
     assembled_queues_used: queueNames,
     assembled_queues_missing: missingQueueNames.length ? missingQueueNames : undefined,
+    assembled_site_filter: envSkipSite ? 'none_env' : assembledOmitSiteAuto ? 'none_auto_retry' : 'site_id',
     fetched_at: new Date().toISOString(),
     note: emptyNote,
+    assembled_note: assembledNoteOk,
   };
 }
 
