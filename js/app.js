@@ -34,6 +34,12 @@ const REFRESH_MS = parseInt(
   10
 );
 
+/**
+ * Sequential spacing between API calls. `Promise.all` on every `/api/*` burst ~8 Google Sheets reads
+ * in one instant from the same service account — trips “Read requests per minute per user” on Netlify.
+ */
+const FETCH_STAGGER_MS = 220;
+
 const ENDPOINTS = [
   ['net-staffing', '/api/net-staffing'],
   ['idle-hourly-log', '/api/idle-hourly-log'],
@@ -1792,17 +1798,19 @@ let lastFetched = {};
 async function fetchLiveDashboard() {
   const results = {};
   const errors = {};
-  await Promise.all(
-    ENDPOINTS.map(async ([key, url]) => {
-      try {
-        results[key] = await fetchJson(url);
-        lastFetched[key] = results[key].fetched_at || new Date().toISOString();
-      } catch (e) {
-        errors[key] = e.message || String(e);
-        lastFetched[key] = null;
-      }
-    })
-  );
+  for (let i = 0; i < ENDPOINTS.length; i++) {
+    const [key, url] = ENDPOINTS[i];
+    try {
+      results[key] = await fetchJson(url);
+      lastFetched[key] = results[key].fetched_at || new Date().toISOString();
+    } catch (e) {
+      errors[key] = e.message || String(e);
+      lastFetched[key] = null;
+    }
+    if (i < ENDPOINTS.length - 1) {
+      await new Promise((r) => setTimeout(r, FETCH_STAGGER_MS));
+    }
+  }
   return { results, errors };
 }
 
