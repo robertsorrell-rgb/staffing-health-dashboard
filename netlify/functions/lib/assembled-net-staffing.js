@@ -157,6 +157,38 @@ function skipSiteOnForecastedQuery() {
   return ['1', 'true', 'yes'].includes(String(env('ASSEMBLED_SKIP_SITE_FILTER') || '').trim().toLowerCase());
 }
 
+function emptyPullStats() {
+  return {
+    apiRows: 0,
+    acceptedRows: 0,
+    droppedBadStart: 0,
+    droppedWrongDay: 0,
+    droppedOutsideOpWindow: 0,
+    droppedBadNet: 0,
+  };
+}
+
+function addPullStats(a, b) {
+  return {
+    apiRows: a.apiRows + b.apiRows,
+    acceptedRows: a.acceptedRows + b.acceptedRows,
+    droppedBadStart: a.droppedBadStart + b.droppedBadStart,
+    droppedWrongDay: a.droppedWrongDay + b.droppedWrongDay,
+    droppedOutsideOpWindow: a.droppedOutsideOpWindow + b.droppedOutsideOpWindow,
+    droppedBadNet: a.droppedBadNet + b.droppedBadNet,
+  };
+}
+
+function parsePositiveInt(name, fallback) {
+  const n = parseInt(env(name), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function parseNonNegMinute(name, fallback) {
+  const n = parseInt(env(name), 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 /** CT hour 0–23 for interval start */
 function hourFromUnix(sec) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -177,7 +209,7 @@ function hourFromUnix(sec) {
 
 /**
  * Paginate forecasted_vs_actuals per queue and fill hourly buckets (half-hours rolled later).
- * @returns {Promise<Record<string, Record<string, { sum: number, n: number }>>>}
+ * @returns {Promise<{ buckets: Record<string, Record<string, { sum: number, n: number }>>, stats: ReturnType<emptyPullStats> }>}
  */
 async function pullForecastBuckets({
   apiBase,
@@ -197,6 +229,7 @@ async function pullForecastBuckets({
 }) {
   const buckets = {};
   for (const q of capMap) buckets[q.label] = {};
+  const stats = emptyPullStats();
 
   for (const qDef of capMap) {
     const queueId = queueIdMap[qDef.queue];
@@ -214,7 +247,10 @@ async function pullForecastBuckets({
         limit: pageSize,
         offset,
       };
-      if (!omitSiteFilter && siteId) qParams.site_id = siteId;
+      if (!omitSiteFilter && siteId) {
+        qParams.site_id = siteId;
+        qParams.site = siteId;
+      }
 
       const res = await assembledFetch(apiBase, apiKey, '/forecasted_vs_actuals', qParams);
       const intervals = res.forecasts_vs_actuals || res.forecasted_vs_actuals || [];
@@ -227,23 +263,37 @@ async function pullForecastBuckets({
         });
       }
       for (const it of intervals) {
+        stats.apiRows += 1;
         const startUnix = intervalStartToUnixSec(it.start_time);
-        if (startUnix == null) continue;
+        if (startUnix == null) {
+          stats.droppedBadStart += 1;
+          continue;
+        }
         const slotMs = startUnix * 1000;
         const ctDay = new Date(slotMs).toLocaleDateString('en-CA', { timeZone: TZ });
-        if (ctDay !== dateIso) continue;
+        if (ctDay !== dateIso) {
+          stats.droppedWrongDay += 1;
+          continue;
+        }
 
         const { hr, minute } = hourFromUnix(startUnix);
         const slotMinute = hr * 60 + minute;
-        if (slotMinute < opStartMin || slotMinute >= opEndMin) continue;
+        if (slotMinute < opStartMin || slotMinute >= opEndMin) {
+          stats.droppedOutsideOpWindow += 1;
+          continue;
+        }
 
         const scheduled = Number(it.staffing_scheduled) || 0;
         const required =
           it.staffing_required && it.staffing_required.forecasted != null ? Number(it.staffing_required.forecasted) : 0;
         let net =
           it.staffing_net != null && it.staffing_net !== '' ? Number(it.staffing_net) : scheduled - required;
-        if (!Number.isFinite(net)) continue;
+        if (!Number.isFinite(net)) {
+          stats.droppedBadNet += 1;
+          continue;
+        }
 
+        stats.acceptedRows += 1;
         const b = buckets[qDef.label];
         if (!b[hr]) b[hr] = { sum: 0, n: 0 };
         b[hr].sum += net;
@@ -255,7 +305,7 @@ async function pullForecastBuckets({
     }
   }
 
-  return buckets;
+  return { buckets, stats };
 }
 
 function matrixHoursFromBuckets(buckets, capMap, rollup) {
@@ -316,10 +366,10 @@ async function loadNetStaffingFromAssembled() {
   const apiBase = (env('ASSEMBLED_API_BASE') || API_BASE_DEFAULT).replace(/\/$/, '');
   const siteName = env('ASSEMBLED_SITE_NAME') || 'Consumer Sales';
   const channel = env('ASSEMBLED_CHANNEL') || 'phone';
-  const intervalSec = parseInt(env('ASSEMBLED_INTERVAL_SECONDS'), 10);
-  const pageSize = parseInt(env('ASSEMBLED_PAGE_SIZE'), 10);
-  const opStartMin = parseInt(env('ASSEMBLED_OP_START_MINUTE'), 10);
-  const opEndMin = parseInt(env('ASSEMBLED_OP_END_MINUTE'), 10);
+  const intervalSec = parsePositiveInt('ASSEMBLED_INTERVAL_SECONDS', 1800);
+  const pageSize = parsePositiveInt('ASSEMBLED_PAGE_SIZE', 20);
+  const opStartMin = parseNonNegMinute('ASSEMBLED_OP_START_MINUTE', 420);
+  const opEndMin = parseNonNegMinute('ASSEMBLED_OP_END_MINUTE', 1320);
 
   const capMap = activeCapQueueMap();
   const queueNames = capMap.map((q) => q.queue);
@@ -341,7 +391,8 @@ async function loadNetStaffingFromAssembled() {
 
   const envSkipSite = skipSiteOnForecastedQuery();
 
-  let buckets = await pullForecastBuckets({
+  let pullStats = emptyPullStats();
+  let pull1 = await pullForecastBuckets({
     apiBase,
     apiKey,
     capMap,
@@ -357,12 +408,14 @@ async function loadNetStaffingFromAssembled() {
     opStartMin,
     opEndMin,
   });
+  pullStats = addPullStats(pullStats, pull1.stats);
+  let buckets = pull1.buckets;
 
   let { matrix, hours } = matrixHoursFromBuckets(buckets, capMap, rollup);
   /** If site-scoped pull is empty, retry once without site_id (common on Netlify / multi-site tenants). */
   let assembledOmitSiteAuto = false;
   if (matrix.length === 0 && !envSkipSite && missingQueueNames.length === 0) {
-    buckets = await pullForecastBuckets({
+    const pull2 = await pullForecastBuckets({
       apiBase,
       apiKey,
       capMap,
@@ -378,6 +431,8 @@ async function loadNetStaffingFromAssembled() {
       opStartMin,
       opEndMin,
     });
+    pullStats = addPullStats(pullStats, pull2.stats);
+    buckets = pull2.buckets;
     ({ matrix, hours } = matrixHoursFromBuckets(buckets, capMap, rollup));
     assembledOmitSiteAuto = matrix.length > 0;
   }
@@ -389,11 +444,13 @@ async function loadNetStaffingFromAssembled() {
       emptyNote = `Assembled has no matching queues for: ${missingQueueNames.join(
         ', '
       )}. Names must match Assembled (see CAP_QUEUE_MAP / ASSEMBLED_NET_STAFFING_QUEUES). Site “${siteName}”, channel “${channel}”.`;
+    } else if (pullStats.apiRows > 0 && pullStats.acceptedRows === 0) {
+      emptyNote = `Assembled returned ${pullStats.apiRows} forecast interval rows for channel “${channel}” but none counted toward today CT (${dateIso}) or op window minutes ${opStartMin}–${opEndMin} (wrong CT day: ${pullStats.droppedWrongDay}, outside window: ${pullStats.droppedOutsideOpWindow}, unusable net: ${pullStats.droppedBadNet}, bad timestamps: ${pullStats.droppedBadStart}). Adjust ASSEMBLED_OP_* or confirm API interval timestamps are UTC seconds.`;
     } else {
       const siteHint = envSkipSite
         ? 'site filter off (ASSEMBLED_SKIP_SITE_FILTER)'
-        : `site “${siteName}” as site_id (auto-retry without site also returned no rows)`;
-      emptyNote = `Assembled returned no usable interval rows for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — confirm forecast/staffing exists for this date and API key permissions.`;
+        : `site “${siteName}” as site_id + site (auto-retry without site also returned no rows)`;
+      emptyNote = `Assembled returned no forecast interval rows for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — in Assembled UI open Forecast vs Actual for this date/channel/queue; if blank there too, it is data not Netlify. Otherwise confirm API key is a full key for this company (not restricted) and channel name matches Assembled exactly.`;
     }
   } else if (assembledOmitSiteAuto) {
     assembledNoteOk = `Assembled net staffing uses queue + channel only (no site_id); site-scoped API returned no rows.`;
