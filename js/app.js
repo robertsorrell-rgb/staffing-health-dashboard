@@ -301,7 +301,9 @@ function renderHeatmap(container, payload) {
     titleEl.textContent =
       unit === 'people'
         ? `Net staffing (Assembled — hourly ${rollup} of 30‑min slots; same queue/channel as Staffing timeline)`
-        : 'Net staffing vs target (% deviation — Capacity Pull)';
+        : payload.assembled_fallback_reason
+          ? 'Net staffing vs target (% deviation — Capacity Pull sheet; Assembled unavailable — see banner)'
+          : 'Net staffing vs target (% deviation — Capacity Pull)';
   }
   const bandFn = heatmapBandClass;
   const hours = payload.hours || [];

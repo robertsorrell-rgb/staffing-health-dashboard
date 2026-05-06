@@ -5,8 +5,12 @@
  * Uses Assembled’s HTTP resource `/forecasted_vs_actuals` (their name — payload includes staffing metrics).
  */
 
+const crypto = require('crypto');
 const { parseHourHeader } = require('./hour-headers.js');
 const { env } = require('./deploy-defaults.js');
+
+/** GET /sites + /queues responses — stable enough to cache and heavy enough to 429 if refreshed often. */
+const assembledMetaCache = new Map();
 
 const API_BASE_DEFAULT = 'https://api.assembledhq.com/v0';
 const TZ = 'America/Chicago';
@@ -83,24 +87,80 @@ function chicagoMidnightUtcMs(dateIso) {
   return t - secIntoDay * 1000;
 }
 
+function assembledMetaCacheTtlMs() {
+  const n = parseInt(String(env('ASSEMBLED_METADATA_CACHE_SECONDS') || '900'), 10);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n * 1000, 86400000);
+}
+
+function assembledMetaCacheKey(apiBase, apiKey, path) {
+  const fp = crypto.createHash('sha256').update(String(apiKey)).digest('hex').slice(0, 16);
+  return `${apiBase}\n${fp}\n${path}`;
+}
+
+function assembled429MaxAttempts() {
+  const n = parseInt(String(env('ASSEMBLED_RATE_LIMIT_MAX_ATTEMPTS') || '6'), 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 12) : 6;
+}
+
+async function sleepMs(ms) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
 async function assembledFetch(apiBase, apiKey, path, params) {
+  const ttlMs = assembledMetaCacheTtlMs();
+  if (ttlMs > 0 && (path === '/sites' || path === '/queues')) {
+    const ck = assembledMetaCacheKey(apiBase, apiKey, path);
+    const hit = assembledMetaCache.get(ck);
+    if (hit && Date.now() < hit.expires) return hit.payload;
+  }
+
   const keys = Object.keys(params || {}).filter((k) => params[k] !== undefined && params[k] !== null && params[k] !== '');
   const qs = keys.map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(params[k]))}`).join('&');
   const url = `${apiBase}${path}${qs ? `?${qs}` : ''}`;
   const auth = Buffer.from(`${apiKey}:`, 'utf8').toString('base64');
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Basic ${auth}`,
-      'Content-Type': 'application/json',
-    },
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    const err = new Error(`Assembled ${path} ${res.status}: ${text.slice(0, 400)}`);
-    err.statusCode = res.status === 401 || res.status === 403 ? 503 : 502;
+  const headers = {
+    Authorization: `Basic ${auth}`,
+    'Content-Type': 'application/json',
+  };
+
+  const maxAttempts = assembled429MaxAttempts();
+  let lastText = '';
+  let lastStatus = 0;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch(url, { headers });
+    lastStatus = res.status;
+    lastText = await res.text();
+
+    if (res.ok) {
+      const parsed = lastText ? JSON.parse(lastText) : {};
+      if (ttlMs > 0 && (path === '/sites' || path === '/queues')) {
+        const ck = assembledMetaCacheKey(apiBase, apiKey, path);
+        assembledMetaCache.set(ck, { expires: Date.now() + ttlMs, payload: parsed });
+      }
+      return parsed;
+    }
+
+    if (res.status === 429 && attempt < maxAttempts) {
+      const ra = res.headers.get('retry-after');
+      let waitMs = Math.min(65000, 750 * 2 ** (attempt - 1) + Math.floor(Math.random() * 400));
+      if (ra && /^\d+$/.test(String(ra).trim())) {
+        waitMs = Math.max(waitMs, parseInt(String(ra).trim(), 10) * 1000);
+      }
+      await sleepMs(waitMs);
+      continue;
+    }
+
+    const err = new Error(`Assembled ${path} ${res.status}: ${lastText.slice(0, 400)}`);
+    err.statusCode =
+      res.status === 401 || res.status === 403 ? 503 : res.status === 429 ? 503 : 502;
     throw err;
   }
-  return text ? JSON.parse(text) : {};
+
+  const err = new Error(`Assembled ${path} ${lastStatus}: ${lastText.slice(0, 400)}`);
+  err.statusCode = lastStatus === 429 ? 503 : 502;
+  throw err;
 }
 
 function objectRows(raw) {
