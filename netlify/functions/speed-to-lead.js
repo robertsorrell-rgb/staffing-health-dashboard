@@ -59,6 +59,29 @@ function resolveSpeedMinutesColumnIndex(headers) {
     if ((h.includes('response') || h.includes('first')) && (h.includes('min') || h.includes('time'))) score += 9;
     if (h.includes('handle') && (h.includes('time') || h.includes('min'))) score += 7;
     if (h.includes('contact') && h.includes('min')) score += 6;
+    if (h.includes('speed') && (h.includes('contact') || h.includes('response'))) score += 12;
+    if (/time[_\s-]?to[_\s-]?(contact|response|reply|touch|lead|call)/.test(h)) score += 12;
+    if (/\b(ttc|speed_to_contact|contact_speed)\b/.test(h)) score += 11;
+    const timingWord =
+      h.includes('min') ||
+      h.includes('minute') ||
+      /\bsecs?\b/.test(h) ||
+      h.includes('duration') ||
+      h.includes('elapsed') ||
+      h.includes('latency') ||
+      h.includes('lag') ||
+      h.includes('delay');
+    const funnelWord =
+      /\blead\b/.test(h) ||
+      /\bcontact\b/.test(h) ||
+      /\bfirst\b/.test(h) ||
+      /\brouting\b/.test(h) ||
+      /\bassign(ed|ment)?\b/.test(h) ||
+      /\bqueue\b/.test(h);
+    if (timingWord && funnelWord) score += 10;
+    if (/\bsla\b/.test(h) && timingWord) score += 8;
+    if ((/_mins?\b|\bmins?_|\bminutes?\b)/.test(h) || /\.minutes?\b/.test(h)) && funnelWord) score += 9;
+    if (/\bwait\b/.test(h) && timingWord) score += 6;
     if (score > 0) scored.push({ i, score });
   }
   scored.sort((a, b) => b.score - a.score);
@@ -133,6 +156,13 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
   const sgCol = salesGroupColumnIndex(headers);
 
   if (speedCol < 0) {
+    const fieldList =
+      headers.length > 0
+        ? ` Looker fields (0-based index): ${headers
+            .slice(0, 20)
+            .map((name, idx) => `${idx}: ${String(name || '').trim() || '(empty)'}`)
+            .join('; ')}${headers.length > 20 ? ' …' : '.'}`
+        : '';
     return {
       configured: true,
       source,
@@ -148,8 +178,8 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
       speed_column_used: null,
       note:
         source === 'looker'
-          ? 'Looker JSON had no recognizable speed-to-lead minutes field. Rename a field to include “speed” and “lead”, or set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX (0-based).'
-          : 'No speed-to-lead minutes column found. Set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX (0-based column index) or add a header containing both “speed” and “lead”.',
+          ? `Looker JSON had no recognizable speed-to-lead minutes field. Set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX to the 0-based column index for minutes (see field list below), or rename the explore measure.${fieldList}`
+          : `No speed-to-lead minutes column found. Set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX (0-based column index) or add a header containing both “speed” and “lead”.${fieldList}`,
       headers,
       rows_preview: rows.slice(0, 5),
       fetched_at: new Date().toISOString(),
