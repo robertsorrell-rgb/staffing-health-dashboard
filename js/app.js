@@ -136,6 +136,16 @@ function renderHeatmap(container, payload, options = {}) {
   container.appendChild(wrap);
 }
 
+/** 0–23 → compact 12-hour label for sparkline axis (e.g. 7 AM, 12 PM, 9 PM). */
+function formatSparklineHour12(h) {
+  const n = Math.floor(Number(h));
+  if (!Number.isFinite(n) || n < 0 || n > 23) return String(h);
+  if (n === 0) return '12 AM';
+  if (n === 12) return '12 PM';
+  if (n < 12) return `${n} AM`;
+  return `${n - 12} PM`;
+}
+
 /** Which hours get a tick + label under the idle sparkline (start/end always included). */
 function pickSparklineHourTicks(minH, maxH) {
   const lo = Math.min(minH, maxH);
@@ -238,7 +248,7 @@ function renderSparkline(container, spark) {
     label.setAttribute('y', String(axisY + 14));
     label.setAttribute('text-anchor', 'middle');
     label.setAttribute('class', 'sparkline-hour-label');
-    label.textContent = `${String(th).padStart(2, '0')}`;
+    label.textContent = formatSparklineHour12(th);
     svg.appendChild(label);
   }
 
@@ -247,7 +257,7 @@ function renderSparkline(container, spark) {
   svg.setAttribute(
     'aria-label',
     hoursPresent.length
-      ? `Idle percent by hour ${lo}:00–${hi}:00 Central`
+      ? `Idle percent from ${formatSparklineHour12(lo)} to ${formatSparklineHour12(hi)} Central`
       : 'Idle percent trend'
   );
 
