@@ -2285,7 +2285,13 @@ function renderSpeedToLeadPanel(data, errMsg) {
           : '';
   const srcBit = src ? ` · ${src}` : '';
   const col = data.speed_column_used ? ` · ${data.speed_column_used}` : '';
-  meta.textContent = `Today (CT): ${sum.rows_with_valid_minutes ?? 0} leads with minutes / ${sum.rows_today ?? 0} rows${col}${srcBit}.`;
+  const baseMeta = `Today (CT): ${sum.rows_with_valid_minutes ?? 0} leads with minutes / ${sum.rows_today ?? 0} rows${col}${srcBit}.`;
+  const explore = data.looker_explore_url;
+  if (explore && /^https?:\/\//i.test(String(explore))) {
+    meta.innerHTML = `${escapeHtml(baseMeta)} <a class="digest-link stl-looker-link" href="${escapeAttr(explore)}" target="_blank" rel="noopener noreferrer">Open in Looker →</a>`;
+  } else {
+    meta.textContent = baseMeta;
+  }
 
   const note = data.note
     ? `<p class="panel-muted" style="margin-top:8px;line-height:1.4;">${escapeHtml(data.note)}</p>`

@@ -1492,6 +1492,10 @@ table.rollup-table tfoot tr.rollup-sum-row td {
   margin: 0 0 4px;
   line-height: 1.4;
 }
+.stl-meta-line .stl-looker-link {
+  margin-left: 10px;
+  white-space: nowrap;
+}
 
 @media (max-width: 720px) {
   .main-content {

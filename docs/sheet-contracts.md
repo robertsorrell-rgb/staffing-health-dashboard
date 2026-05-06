@@ -88,6 +88,7 @@ These are **not** wired into Staffing Health by default; they show up in other t
 When **`LOOKER_BASE_URL`**, **`LOOKER_CLIENT_ID`**, **`LOOKER_CLIENT_SECRET`**, and either **`LOOKER_SPEED_TO_LEAD_QUERY_ID`** or **`LOOKER_SPEED_TO_LEAD_LOOK_ID`** are set, the function runs that saved **query** or **look** via Looker API **4.0** (`/login`, then `/queries/{id}/run/json` or `/looks/{id}/run/json`). Response JSON is normalized to rows; the same **speed-to-lead** and **sales group** column heuristics apply as below.
 
 - Optional **`LOOKER_API_VERSION`** (default `4.0`).
+- Optional **`LOOKER_SPEED_TO_LEAD_EXPLORE_URL`** — HTTPS explore URL (e.g. `…/explore/…?qid=…`). Returned in JSON as **`looker_explore_url`** so the dashboard can show **Open in Looker →** (also attached when using the sheet fallback if set).
 - If the result includes a parseable **date** / **timestamp** / **lead_date**-style field, rows are filtered to **today (America/Chicago)** in the function. Otherwise **all returned rows** are used — filter in Looker if you need a narrower window.
 
 ### Fallback: Google Sheet

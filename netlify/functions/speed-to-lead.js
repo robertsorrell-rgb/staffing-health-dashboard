@@ -13,6 +13,19 @@ const {
 
 const CACHE_SEC = parseInt(env('SPEED_TO_LEAD_CACHE_SECONDS'), 10);
 
+/** Optional dashboard link (same tab users hit in browser). Not secret. */
+function lookerExploreUrlFromEnv() {
+  const u = String(process.env.LOOKER_SPEED_TO_LEAD_EXPLORE_URL || '').trim();
+  if (!u) return null;
+  try {
+    const parsed = new URL(u);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
 function salesGroupColumnIndex(headers) {
   const lower = headers.map((h) => String(h || '').trim().toLowerCase());
   const idx = lower.findIndex(
@@ -111,7 +124,10 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
     date_column_used = null,
     source = 'sheet',
     lookerArtifact = null,
+    looker_explore_url = null,
   } = ctx || {};
+  const exploreBit =
+    looker_explore_url && typeof looker_explore_url === 'string' ? { looker_explore_url } : {};
 
   const speedCol = resolveSpeedMinutesColumnIndex(headers);
   const sgCol = salesGroupColumnIndex(headers);
@@ -137,6 +153,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
       headers,
       rows_preview: rows.slice(0, 5),
       fetched_at: new Date().toISOString(),
+      ...exploreBit,
     };
   }
 
@@ -187,6 +204,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
     },
     by_sales_group: by_sales_group.slice(0, 32),
     fetched_at: new Date().toISOString(),
+    ...exploreBit,
   };
 }
 
@@ -250,6 +268,7 @@ exports.handler = async (event) => {
   const spreadsheetId = env('SPEED_TO_LEAD_SPREADSHEET_ID');
   const tab = env('SPEED_TO_LEAD_TAB');
   const today = todayCTDateStr();
+  const lookerExploreUrl = lookerExploreUrlFromEnv();
 
   const lookerCfg = lookerEnvReady();
 
@@ -278,6 +297,7 @@ exports.handler = async (event) => {
         date_column_used: dateMeta,
         source: 'looker',
         lookerArtifact: artifact,
+        looker_explore_url: lookerExploreUrl,
       });
       return ok(payload, CACHE_SEC);
     }
@@ -305,6 +325,7 @@ exports.handler = async (event) => {
       date_column_used: dateHeader || null,
       source: 'sheet',
       lookerArtifact: null,
+      looker_explore_url: lookerExploreUrl,
     });
     return ok(payload, CACHE_SEC);
   } catch (err) {

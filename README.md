@@ -174,7 +174,7 @@ node scripts/smoke-endpoints.js      # adherence, targeted-vto, others (needs .e
 |------|----------|
 | `/api/net-staffing` | Net staffing matrix (Assembled when keyed; sheet only if `CAPACITY_PULL_SOURCE=sheet` or no key) |
 | `/api/idle-hourly-log` | Weighted idle % from hourly log |
-| `/api/speed-to-lead` | **Speed-to-lead (minutes)** — avg/median + by sales group. **Primary:** Looker API (`LOOKER_BASE_URL`, `LOOKER_CLIENT_ID`, `LOOKER_CLIENT_SECRET`, and `LOOKER_SPEED_TO_LEAD_QUERY_ID` *or* `LOOKER_SPEED_TO_LEAD_LOOK_ID`). **Fallback:** Google Sheet (`SPEED_TO_LEAD_*` in `deploy-defaults.js`). |
+| `/api/speed-to-lead` | **Speed-to-lead (minutes)** — avg/median + by sales group. **Primary:** Looker API (`LOOKER_BASE_URL`, `LOOKER_CLIENT_ID`, `LOOKER_CLIENT_SECRET`, and `LOOKER_SPEED_TO_LEAD_QUERY_ID` *or* `LOOKER_SPEED_TO_LEAD_LOOK_ID`). Optional **`LOOKER_SPEED_TO_LEAD_EXPLORE_URL`** adds an **Open in Looker →** link on the panel. **Fallback:** Google Sheet (`SPEED_TO_LEAD_*` in `deploy-defaults.js`). |
 | `/api/adherence` | Ping counts + digest link |
 | `/api/targeted-vto` | Combined VTO from Offers (COMMITTED) + Requests_Submissions (Approved): today + **Sun–Sat CT week** `combined_week.by_group` |
 | `/api/auto-vto` | Requests_Submissions rows today (raw preview panel) |
