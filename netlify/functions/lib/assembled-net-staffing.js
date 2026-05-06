@@ -137,6 +137,26 @@ function resolveQueueIds(res, queueNames) {
   return out;
 }
 
+/** Assembled sometimes returns epoch ms; normalize to Unix seconds. */
+function intervalStartToUnixSec(t) {
+  const n = Number(t);
+  if (!Number.isFinite(n)) return null;
+  if (n > 1e12) return Math.floor(n / 1000);
+  return Math.floor(n);
+}
+
+/** Snap API window to interval grid (matches rolling 30m / 1h buckets). */
+function alignForecastWindowSec(startSec, endSec, intervalSec) {
+  const step = Number.isFinite(intervalSec) && intervalSec > 0 ? intervalSec : 1800;
+  const lo = Math.floor(startSec / step) * step;
+  const hi = Math.ceil(endSec / step) * step;
+  return lo < hi ? { startSec: lo, endSec: hi } : { startSec, endSec };
+}
+
+function skipSiteOnForecastedQuery() {
+  return ['1', 'true', 'yes'].includes(String(env('ASSEMBLED_SKIP_SITE_FILTER') || '').trim().toLowerCase());
+}
+
 /** CT hour 0–23 for interval start */
 function hourFromUnix(sec) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -184,8 +204,11 @@ async function loadNetStaffingFromAssembled() {
   const dayStartMs = chicagoMidnightUtcMs(dateIso);
   const opStartMs = dayStartMs + opStartMin * 60000;
   const opEndMs = dayStartMs + opEndMin * 60000;
-  const startSec = Math.floor(opStartMs / 1000);
-  const endSec = Math.floor(opEndMs / 1000);
+  let startSec = Math.floor(opStartMs / 1000);
+  let endSec = Math.floor(opEndMs / 1000);
+  ({ startSec, endSec } = alignForecastWindowSec(startSec, endSec, intervalSec));
+
+  const skipSite = skipSiteOnForecastedQuery();
 
   /** label -> hour -> { sum } */
   const buckets = {};
@@ -198,24 +221,36 @@ async function loadNetStaffingFromAssembled() {
     let offset = 0;
     let keepGoing = true;
     while (keepGoing) {
-      const res = await assembledFetch(apiBase, apiKey, '/forecasted_vs_actuals', {
+      const qParams = {
         start_time: startSec,
         end_time: endSec,
         interval: intervalSec,
         channel,
-        site: siteId,
         queue: queueId,
         limit: pageSize,
         offset,
-      });
-      const intervals = res.forecasts_vs_actuals || [];
+      };
+      /** Docs list queue/channel/times; site filter uses `site_id` (legacy `site` was ignored on some tenants). */
+      if (!skipSite && siteId) qParams.site_id = siteId;
+
+      const res = await assembledFetch(apiBase, apiKey, '/forecasted_vs_actuals', qParams);
+      const intervals = res.forecasts_vs_actuals || res.forecasted_vs_actuals || [];
+      if (offset === 0 && intervals.length === 0) {
+        // eslint-disable-next-line no-console
+        console.warn('[assembled-net-staffing] forecasted_vs_actuals empty page', {
+          queue: qDef.queue,
+          reportedTotal: res.total,
+          skipSiteFilter: skipSite,
+        });
+      }
       for (const it of intervals) {
-        if (!it.start_time) continue;
-        const slotMs = it.start_time * 1000;
+        const startUnix = intervalStartToUnixSec(it.start_time);
+        if (startUnix == null) continue;
+        const slotMs = startUnix * 1000;
         const ctDay = new Date(slotMs).toLocaleDateString('en-CA', { timeZone: TZ });
         if (ctDay !== dateIso) continue;
 
-        const { hr, minute } = hourFromUnix(it.start_time);
+        const { hr, minute } = hourFromUnix(startUnix);
         const slotMinute = hr * 60 + minute;
         if (slotMinute < opStartMin || slotMinute >= opEndMin) continue;
 
@@ -290,7 +325,10 @@ async function loadNetStaffingFromAssembled() {
         ', '
       )}. Names must match Assembled (see CAP_QUEUE_MAP / ASSEMBLED_NET_STAFFING_QUEUES). Site “${siteName}”, channel “${channel}”.`;
     } else {
-      emptyNote = `Assembled returned no interval rows for today CT (${dateIso}) with site “${siteName}”, channel “${channel}”. Queues resolved OK — check schedules/forecast, operating window (ASSEMBLED_OP_*), or API scope.`;
+      const siteHint = skipSite
+        ? 'site filter off (ASSEMBLED_SKIP_SITE_FILTER)'
+        : `site “${siteName}” as site_id`;
+      emptyNote = `Assembled returned no usable interval rows for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — try ASSEMBLED_SKIP_SITE_FILTER=1 on Netlify if the Forecast vs Actual UI shows data without a site filter; otherwise confirm forecast/staffing exists for this date and API key permissions.`;
     }
   }
 
