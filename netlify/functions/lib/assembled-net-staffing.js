@@ -158,6 +158,14 @@ function skipSiteOnForecastedQuery() {
   return ['1', 'true', 'yes'].includes(String(env('ASSEMBLED_SKIP_SITE_FILTER') || '').trim().toLowerCase());
 }
 
+/**
+ * Second pull without site_id mixes all sites for the same queue name — numbers diverge from a site-filtered
+ * Staffing timeline (wrong highs/lows and spurious negatives). Opt in only when site-scoped pulls return nothing.
+ */
+function allowNoSiteAutoRetry() {
+  return ['1', 'true', 'yes'].includes(String(env('ASSEMBLED_ALLOW_NO_SITE_RETRY') || '').trim().toLowerCase());
+}
+
 function emptyPullStats() {
   return {
     apiRows: 0,
@@ -235,6 +243,8 @@ function hourFromUnix(sec) {
     hour: 'numeric',
     minute: 'numeric',
     hour12: false,
+    hourCycle: 'h23',
+    calendar: 'gregory',
   }).formatToParts(new Date(sec * 1000));
   const H = {};
   for (const p of parts) if (p.type !== 'literal') H[p.type] = p.value;
@@ -274,6 +284,9 @@ async function pullForecastBuckets({
   for (const qDef of capMap) {
     const queueId = queueIdMap[qDef.queue];
     if (!queueId) continue;
+
+    /** Dedupe by interval start (seconds); pagination/overlap last write wins */
+    const slotNets = new Map();
 
     let offset = 0;
     let keepGoing = true;
@@ -329,15 +342,20 @@ async function pullForecastBuckets({
           continue;
         }
 
-        stats.acceptedRows += 1;
-        const b = buckets[qDef.label];
-        if (!b[hr]) b[hr] = { sum: 0, n: 0 };
-        b[hr].sum += net;
-        b[hr].n += 1;
+        slotNets.set(startUnix, net);
       }
       if (intervals.length < pageSize) keepGoing = false;
       else offset += pageSize;
       await new Promise((r) => setTimeout(r, 120));
+    }
+
+    stats.acceptedRows += slotNets.size;
+    for (const [startUnix, net] of slotNets) {
+      const { hr } = hourFromUnix(startUnix);
+      const b = buckets[qDef.label];
+      if (!b[hr]) b[hr] = { sum: 0, n: 0 };
+      b[hr].sum += net;
+      b[hr].n += 1;
     }
   }
 
@@ -451,9 +469,17 @@ async function loadNetStaffingFromAssembled() {
   let buckets = pull1.buckets;
 
   let { matrix, hours } = matrixHoursFromBuckets(buckets, capMap, rollup);
-  /** If site-scoped pull is empty, retry once without site_id (common on Netlify / multi-site tenants). */
+  /**
+   * Queue-only retry (no site_id) can match Netlify when site-scoped returns empty, but it aggregates every site
+   * for that queue — net staffing then diverges from a site-filtered timeline. Opt-in: ASSEMBLED_ALLOW_NO_SITE_RETRY=1.
+   */
   let assembledOmitSiteAuto = false;
-  if (matrix.length === 0 && !envSkipSite && missingQueueNames.length === 0) {
+  if (
+    matrix.length === 0 &&
+    !envSkipSite &&
+    missingQueueNames.length === 0 &&
+    allowNoSiteAutoRetry()
+  ) {
     const pull2 = await pullForecastBuckets({
       apiBase,
       apiKey,
@@ -489,13 +515,17 @@ async function loadNetStaffingFromAssembled() {
     } else {
       const siteHint = envSkipSite
         ? 'site filter off (ASSEMBLED_SKIP_SITE_FILTER)'
-        : `site “${siteName}” as site_id + site (auto-retry without site also returned no rows)`;
+        : allowNoSiteAutoRetry()
+          ? `site “${siteName}” as site_id + site (queue-only retry also returned no rows)`
+          : `site “${siteName}” as site_id + site (queue-only retry disabled — set ASSEMBLED_ALLOW_NO_SITE_RETRY=1 only if site-scoped pulls are empty; retry blends all sites and breaks timeline parity)`;
       emptyNote = `Assembled returned no staffing intervals for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — in Assembled, confirm **net staffing** (scheduled vs required / staffing surplus) exists for this date, channel, and queues; if it’s empty there too, this is missing Assembled data or API scope, not Netlify. Otherwise confirm the API key is a full key for this company (not restricted) and the channel name matches Assembled exactly.`;
     }
   } else {
     const parts = [];
     if (assembledOmitSiteAuto) {
-      parts.push('Net staffing uses queue + channel only (no site_id); site-scoped API had no rows.');
+      parts.push(
+        'WARNING: Net staffing used queue + channel only (ASSEMBLED_ALLOW_NO_SITE_RETRY) — mixed all sites; compare only if timeline has no site filter.'
+      );
     }
     if (netMode !== 'api' || scheduleId) {
       parts.push(
