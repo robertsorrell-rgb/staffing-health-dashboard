@@ -136,21 +136,71 @@ function renderHeatmap(container, payload, options = {}) {
   container.appendChild(wrap);
 }
 
+/** Which hours get a tick + label under the idle sparkline (start/end always included). */
+function pickSparklineHourTicks(minH, maxH) {
+  const lo = Math.min(minH, maxH);
+  const hi = Math.max(minH, maxH);
+  const range = hi - lo;
+  const step = range <= 8 ? 1 : range <= 16 ? 2 : Math.max(1, Math.ceil(range / 8));
+  const ticks = [];
+  for (let h = lo; h <= hi; h += step) ticks.push(h);
+  if (ticks[ticks.length - 1] !== hi) ticks.push(hi);
+  return ticks;
+}
+
 function renderSparkline(container, spark) {
   container.innerHTML = '';
   if (!spark || !spark.length) return;
-  const w = 320;
-  const h = 56;
-  const pad = 4;
   const vals = spark.map((s) => (s.idle_pct == null ? null : s.idle_pct));
   const defined = vals.filter((v) => v != null);
   if (!defined.length) return;
+
+  const w = 440;
+  const chartH = 48;
+  const axisH = 26;
+  const padX = 12;
+  const padTop = 8;
+  const totalH = padTop + chartH + axisH;
+  const plotW = w - padX * 2;
+
+  const hoursPresent = spark.map((s) => s.hour).filter((h) => h != null && Number.isFinite(Number(h)));
+  let minH;
+  let maxH;
+  let xPos;
+  if (hoursPresent.length) {
+    minH = Math.min(...hoursPresent);
+    maxH = Math.max(...hoursPresent);
+    const hourSpan = Math.max(maxH - minH, 1e-6);
+    xPos = (hour) => padX + ((hour - minH) / hourSpan) * plotW;
+  } else {
+    minH = 0;
+    maxH = Math.max(spark.length - 1, 1);
+    const idxSpan = Math.max(spark.length - 1, 1);
+    xPos = (_hour, i = 0) => padX + (i / idxSpan) * plotW;
+  }
+
   const min = Math.min(...defined, 0);
   const max = Math.max(...defined, 100);
-  const span = max - min || 1;
+  const vSpan = max - min || 1;
+  const yAt = (v) => padTop + chartH - ((v - min) / vSpan) * chartH;
+
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('viewBox', `0 0 ${w} ${totalH}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
   svg.classList.add('sparkline-svg');
+  const axisY = padTop + chartH;
+  const tickHours = hoursPresent.length ? pickSparklineHourTicks(minH, maxH) : [];
+  for (const th of tickHours) {
+    const x = xPos(th);
+    const grid = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    grid.setAttribute('x1', String(x));
+    grid.setAttribute('y1', String(padTop));
+    grid.setAttribute('x2', String(x));
+    grid.setAttribute('y2', String(axisY));
+    grid.setAttribute('class', 'sparkline-grid');
+    svg.appendChild(grid);
+  }
+
   let d = '';
   let penUp = true;
   spark.forEach((s, i) => {
@@ -159,9 +209,10 @@ function renderSparkline(container, spark) {
       penUp = true;
       return;
     }
-    const x = pad + (i / Math.max(spark.length - 1, 1)) * (w - pad * 2);
-    const y = h - pad - ((v - min) / span) * (h - pad * 2);
-    d += `${penUp ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `;
+    const hour = s.hour != null && Number.isFinite(Number(s.hour)) ? Number(s.hour) : null;
+    const x = hour != null ? xPos(hour) : xPos(null, i);
+    const y = yAt(v);
+    d += `${penUp ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)} `;
     penUp = false;
   });
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -169,8 +220,44 @@ function renderSparkline(container, spark) {
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke', 'var(--sky)');
   path.setAttribute('stroke-width', '2');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
   svg.appendChild(path);
+
+  for (const th of tickHours) {
+    const x = xPos(th);
+    const tick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    tick.setAttribute('x1', String(x));
+    tick.setAttribute('y1', String(axisY));
+    tick.setAttribute('x2', String(x));
+    tick.setAttribute('y2', String(axisY + 5));
+    tick.setAttribute('class', 'sparkline-tick');
+    svg.appendChild(tick);
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', String(x));
+    label.setAttribute('y', String(axisY + 14));
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('class', 'sparkline-hour-label');
+    label.textContent = `${String(th).padStart(2, '0')}`;
+    svg.appendChild(label);
+  }
+
+  const hi = hoursPresent.length ? maxH : spark.length - 1;
+  const lo = hoursPresent.length ? minH : 0;
+  svg.setAttribute(
+    'aria-label',
+    hoursPresent.length
+      ? `Idle percent by hour ${lo}:00–${hi}:00 Central`
+      : 'Idle percent trend'
+  );
+
   container.appendChild(svg);
+  if (hoursPresent.length) {
+    const cap = document.createElement('div');
+    cap.className = 'sparkline-axis-caption';
+    cap.textContent = 'Hour of day (Central)';
+    container.appendChild(cap);
+  }
 }
 
 function escapeHtml(s) {
