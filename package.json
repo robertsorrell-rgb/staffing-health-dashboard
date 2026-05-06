@@ -13,6 +13,7 @@
     "start": "npx --yes serve . -l 8888",
     "bootstrap-env": "node scripts/bootstrap-local-env.js",
     "assembled:list-schedules": "node scripts/assembled-list-schedules.js",
+    "assembled:inspect-forecast": "node scripts/assembled-inspect-forecast.js",
     "dev": "npx --yes netlify dev",
     "dev:functions": "NODE_OPTIONS=--max-old-space-size=8192 npx --yes netlify functions:serve -f netlify/functions -p 8889",
     "dev:proxy": "node scripts/dev-dashboard-proxy.js"

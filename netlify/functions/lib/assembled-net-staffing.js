@@ -403,19 +403,19 @@ function parseNonNegMinute(name, fallback) {
 
 /**
  * Which field drives “net” per 30‑min interval.
- * `timeline` → scheduled − forecasted (Staffing timeline grid when net = sched − required forecast).
- * `api` → staffing_net when numeric, else scheduled − forecasted (**Targeted VTO bot**).
+ * Default **api**: staffing_net when numeric, else scheduled − forecasted — closest to Surplus / many timelines (timeline Net is often NOT the visible Scheduled−Required subtraction).
+ * `timeline` → scheduled − forecasted only (ignores staffing_net) — for debugging when you want raw subtraction from API fields.
  */
 function netComputeMode() {
   let m = env('ASSEMBLED_NET_COMPUTE').trim().toLowerCase().replace(/-/g, '_');
-  if (!m) m = 'timeline';
+  if (!m) m = 'api';
   if (m === 'scheduled_minus_actual') m = 'sched_minus_actual';
   if (m === 'scheduled_minus_forecasted') m = 'sched_minus_forecasted';
   if (m === 'timeline' || m === 'staffing_timeline') return 'sched_minus_forecasted';
   if (m === 'api' || m === 'assembled' || m === 'vto_bot') return 'api';
   if (m === 'sched_minus_forecasted') return 'sched_minus_forecasted';
   if (m === 'sched_minus_actual') return 'sched_minus_actual';
-  return 'sched_minus_forecasted';
+  return 'api';
 }
 
 /** One interval’s net staffing (people-style), before hourly rollup. */
@@ -807,14 +807,14 @@ async function loadNetStaffingFromAssembled() {
     );
     if (netMode === 'api') {
       parts.push(
-        'Net per 30‑min interval: staffing_net when present, else scheduled − staffing_required.forecasted (Targeted VTO bot / Surplus). If the timeline “Net” row is still off, use ASSEMBLED_NET_COMPUTE=timeline.'
+        'Net per 30‑min interval: **staffing_net** when present, else scheduled − staffing_required.forecasted (default — timeline “Net” is usually this Surplus-style value, not the visible Scheduled−Required subtraction).'
       );
     } else if (netMode === 'sched_minus_forecasted') {
       parts.push(
-        'Net per 30‑min interval: **scheduled − staffing_required.forecasted** (typical Staffing timeline net row). For VTO bot parity set ASSEMBLED_NET_COMPUTE=api.'
+        'Net per 30‑min interval: **scheduled − forecasted** only (ASSEMBLED_NET_COMPUTE=timeline). Ignores staffing_net — often disagrees with the blue timeline “Net” row when that row ≠ Sched−Req on screen.'
       );
     } else {
-      parts.push(`Net per interval: ${netMode} (set ASSEMBLED_NET_COMPUTE=timeline or api as needed).`);
+      parts.push(`Net per interval: ${netMode}. Compare raw intervals: npm run assembled:inspect-forecast -- "Queue Name".`);
     }
     assembledNoteOk = parts.join(' ');
   }
