@@ -1991,6 +1991,8 @@ function applyDashboardData(results, errors) {
   const adhErr = document.getElementById('adh-err');
   const adhLiveFloor = document.getElementById('adh-live-floor-ooa');
   const adhLiveFloorMeta = document.getElementById('adh-live-floor-meta');
+  const adhIntraday = document.getElementById('adh-intraday-leaders');
+  const adhIntradayMeta = document.getElementById('adh-intraday-meta');
   if (errors['adherence']) {
     adhErr.hidden = false;
     adhErr.textContent = errors['adherence'];
@@ -2006,6 +2008,14 @@ function applyDashboardData(results, errors) {
     if (adhLiveFloorMeta) {
       adhLiveFloorMeta.hidden = true;
       adhLiveFloorMeta.textContent = '';
+    }
+    if (adhIntraday) {
+      adhIntraday.innerHTML =
+        '<p class="panel-muted">Intraday snapshot unavailable until adherence loads.</p>';
+    }
+    if (adhIntradayMeta) {
+      adhIntradayMeta.hidden = true;
+      adhIntradayMeta.textContent = '';
     }
   } else {
     adhErr.hidden = true;
@@ -2053,6 +2063,47 @@ function applyDashboardData(results, errors) {
                   `<li><span class="adh-ooa-name">${escapeHtml(r.name)}</span> · <span class="adh-ooa-state">${escapeHtml(r.state || '—')}</span> · <span class="adh-ooa-time">${escapeHtml(liveFloorOoaTimeLabel(r))}</span></li>`,
               )
               .join('')}</ul>${extra}`;
+        }
+      }
+    }
+    if (adhIntraday && adhIntradayMeta) {
+      adhIntradayMeta.hidden = true;
+      adhIntradayMeta.textContent = '';
+      if (!adh || adh.configured === false) {
+        adhIntraday.innerHTML = `<p class="panel-muted">${escapeHtml(adh?.note || 'Adherence not configured.')}</p>`;
+      } else {
+        if (adh.intraday_snapshot_note) {
+          adhIntradayMeta.hidden = false;
+          adhIntradayMeta.textContent = adh.intraday_snapshot_note;
+        }
+        const hasIntradayApi =
+          adh &&
+          typeof adh === 'object' &&
+          Object.prototype.hasOwnProperty.call(adh, 'intraday_ooa_leaders');
+        const ileaders = Array.isArray(adh.intraday_ooa_leaders) ? adh.intraday_ooa_leaders : [];
+        if (!hasIntradayApi) {
+          adhIntraday.innerHTML =
+            '<p class="panel-muted">Intraday snapshot is not returned by this API build yet. Deploy latest adherence function.</p>';
+        } else if (!ileaders.length) {
+          adhIntraday.innerHTML =
+            '<p class="panel-muted">No rows in intraday AGENT DRILL-DOWN (or headers not matched).</p>';
+          if (!adh.intraday_snapshot_note && adh.intraday_snapshot_tab) {
+            adhIntradayMeta.hidden = false;
+            adhIntradayMeta.textContent = `Reading tab: ${adh.intraday_snapshot_tab}`;
+          }
+        } else {
+          const maxI = 24;
+          const sl = ileaders.slice(0, maxI);
+          const extraI =
+            ileaders.length > maxI ? `<p class="panel-muted">+${ileaders.length - maxI} more not shown</p>` : '';
+          adhIntraday.innerHTML =
+            `<table class="adh-intraday-table" aria-label="Total OOA minutes today by rep"><thead><tr><th scope="col">Rep</th><th scope="col">Manager</th><th scope="col" style="text-align:right">OOA min</th></tr></thead><tbody>${sl
+              .map((r) => {
+                const tier = r.top_tier ? ' class="adh-intraday-top-tier"' : '';
+                const mins = r.total_ooa_mins_today;
+                return `<tr${tier}><td class="adh-intraday-agent">${escapeHtml(r.agent)}</td><td class="adh-intraday-mgr">${escapeHtml(r.manager)}</td><td class="adh-intraday-mins">${mins}</td></tr>`;
+              })
+              .join('')}</tbody></table>${extraI}`;
         }
       }
     }

@@ -170,6 +170,104 @@ async function resolveLiveFloorRangeParts(spreadsheetId) {
   return { range: `'${esc}'!A1:J4000`, tabTitle };
 }
 
+/**
+ * @param {string} spreadsheetId
+ * @returns {Promise<{ range: string, tabTitle: string }>}
+ */
+async function resolveIntradaySnapshotRangeParts(spreadsheetId) {
+  const explicit = (process.env.ADHERENCE_INTRADAY_SNAPSHOT_RANGE || '').trim();
+  const tabHint = (env('ADHERENCE_INTRADAY_SNAPSHOT_TAB') || 'Intraday_Snapshot').trim();
+  const gid = (process.env.ADHERENCE_INTRADAY_SNAPSHOT_SHEET_GID || '').trim();
+  if (explicit) {
+    const m = explicit.match(/^'([^']+)'\s*!/);
+    const tabGuess = m ? m[1].replace(/''/g, "'") : tabHint;
+    return { range: explicit, tabTitle: tabGuess };
+  }
+  let tabTitle = tabHint;
+  try {
+    tabTitle = await resolveSpreadsheetTabTitle(spreadsheetId, {
+      sheetGid: gid || undefined,
+      tabHint,
+    });
+  } catch {
+    tabTitle = tabHint;
+  }
+  const esc = tabTitle.replace(/'/g, "''");
+  return { range: `'${esc}'!A1:Z600`, tabTitle };
+}
+
+/**
+ * AGENT DRILL-DOWN block: Agent | Manager | … | Total OOA Mins Today
+ * @param {string[][]} values merged formatted/unformatted rows
+ * @returns {{ leaders: { agent: string, manager: string, total_ooa_mins_today: number, top_tier: boolean }[], note: string | null }}
+ */
+function parseIntradayOoaLeaders(values) {
+  if (!values || values.length < 3) return { leaders: [], note: null };
+  const maxR = Math.min(values.length, 120);
+  let header = null;
+  for (let r = 0; r < maxR; r++) {
+    const row = values[r] || [];
+    const lower = row.map((c) => cellToString(c).trim().toLowerCase());
+    let agentCol = -1;
+    let mgrCol = -1;
+    let ooaCol = -1;
+    for (let c = 0; c < lower.length; c++) {
+      const h = lower[c];
+      if (!h) continue;
+      if (h === 'agent') agentCol = c;
+      else if (h === 'manager') mgrCol = c;
+      else if (/total\s*ooa\s*mins\s*today/.test(h)) ooaCol = c;
+      else if (/\btotal\b/.test(h) && /\booa\b/.test(h) && (/min/.test(h) || /today/.test(h))) ooaCol = c;
+    }
+    if (agentCol >= 0 && mgrCol >= 0 && ooaCol >= 0) {
+      header = { r, agentCol, mgrCol, ooaCol };
+      break;
+    }
+  }
+  if (!header) {
+    return {
+      leaders: [],
+      note: 'Could not find AGENT DRILL-DOWN headers (Agent, Manager, Total OOA Mins Today) on Intraday_Snapshot.',
+    };
+  }
+
+  /** @type {{ agent: string, manager: string, total_ooa_mins_today: number }[]} */
+  const raw = [];
+  for (let r = header.r + 1; r < values.length; r++) {
+    const row = values[r] || [];
+    const agent = cellToString(row[header.agentCol]).trim();
+    if (!agent) break;
+    const al = agent.toLowerCase();
+    if (al === 'agent') continue;
+    if (/^(manager summary|agent drill-down)/i.test(agent)) break;
+
+    const manager = cellToString(row[header.mgrCol]).trim();
+    const v = row[header.ooaCol];
+    let mins = null;
+    if (typeof v === 'number' && Number.isFinite(v)) mins = Math.round(v);
+    else {
+      const s = cellToString(v).trim();
+      const m = s.match(/^(\d+)/);
+      if (m) mins = parseInt(m[1], 10);
+    }
+    if (mins == null || !Number.isFinite(mins) || mins < 0) continue;
+    raw.push({ agent, manager, total_ooa_mins_today: mins });
+  }
+
+  if (!raw.length) return { leaders: [], note: null };
+
+  const sorted = [...raw].sort((a, b) => b.total_ooa_mins_today - a.total_ooa_mins_today);
+  const maxMins = sorted[0].total_ooa_mins_today;
+  const leaders = sorted.map((row) => ({
+    agent: row.agent,
+    manager: row.manager,
+    total_ooa_mins_today: row.total_ooa_mins_today,
+    top_tier: maxMins > 0 && row.total_ooa_mins_today === maxMins,
+  }));
+
+  return { leaders, note: null };
+}
+
 exports.handler = async (event) => {
   const pre = handleOptions(event);
   if (pre) return pre;
@@ -188,6 +286,9 @@ exports.handler = async (event) => {
     digest_url: digestUrl || null,
     live_floor_ooa: [],
     live_floor_note: null,
+    intraday_ooa_leaders: [],
+    intraday_snapshot_note: null,
+    intraday_snapshot_tab: null,
     note: 'ADHERENCE_SPREADSHEET_ID not set',
     fetched_at: new Date().toISOString(),
   };
@@ -199,7 +300,9 @@ exports.handler = async (event) => {
   try {
     const { range: liveFloorRange, tabTitle: liveFloorTabTitle } =
       await resolveLiveFloorRangeParts(spreadsheetId);
-    const [values, liveFloorFmt, liveFloorRaw] = await Promise.all([
+    const { range: intradayRange, tabTitle: intradayTabTitle } =
+      await resolveIntradaySnapshotRangeParts(spreadsheetId);
+    const [values, liveFloorFmt, liveFloorRaw, intraFmt, intraRaw] = await Promise.all([
       getSheetValues(spreadsheetId, alertsRange, {
         valueRenderOption: 'UNFORMATTED_VALUE',
         dateTimeRenderOption: 'SERIAL_NUMBER',
@@ -208,6 +311,12 @@ exports.handler = async (event) => {
         valueRenderOption: 'FORMATTED_VALUE',
       }).catch((err) => ({ __error: err.message || String(err) })),
       getSheetValues(spreadsheetId, liveFloorRange, {
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      }).catch((err) => ({ __error: err.message || String(err) })),
+      getSheetValues(spreadsheetId, intradayRange, {
+        valueRenderOption: 'FORMATTED_VALUE',
+      }).catch((err) => ({ __error: err.message || String(err) })),
+      getSheetValues(spreadsheetId, intradayRange, {
         valueRenderOption: 'UNFORMATTED_VALUE',
       }).catch((err) => ({ __error: err.message || String(err) })),
     ]);
@@ -233,6 +342,25 @@ exports.handler = async (event) => {
       liveFloorMerged = rawArr;
     } else {
       liveFloorFetchErr = fmtErr || rawErr || 'Live Floor range returned no usable rows';
+    }
+
+    const intraFmtArr = Array.isArray(intraFmt) ? intraFmt : null;
+    const intraRawArr = Array.isArray(intraRaw) ? intraRaw : null;
+    const intraFmtErr =
+      intraFmt && typeof intraFmt === 'object' && intraFmt.__error ? intraFmt.__error : null;
+    const intraRawErr =
+      intraRaw && typeof intraRaw === 'object' && intraRaw.__error ? intraRaw.__error : null;
+
+    let intradayMerged = [];
+    let intradayFetchErr = null;
+    if (intraFmtArr && intraRawArr) {
+      intradayMerged = mergeFormattedUnformattedRows(intraFmtArr, intraRawArr);
+    } else if (intraFmtArr) {
+      intradayMerged = intraFmtArr;
+    } else if (intraRawArr) {
+      intradayMerged = intraRawArr;
+    } else {
+      intradayFetchErr = intraFmtErr || intraRawErr || 'Intraday snapshot range returned no usable rows';
     }
 
     const today = todayCTDateStr();
@@ -281,6 +409,16 @@ exports.handler = async (event) => {
       live_floor_ooa = parseLiveFloorOoaRows(liveFloorMerged);
     }
 
+    let intraday_ooa_leaders = [];
+    let intraday_snapshot_note = null;
+    if (intradayFetchErr) {
+      intraday_snapshot_note = `Intraday snapshot tab read failed: ${intradayFetchErr}`;
+    } else if (intradayMerged.length) {
+      const parsed = parseIntradayOoaLeaders(intradayMerged);
+      intraday_ooa_leaders = parsed.leaders;
+      intraday_snapshot_note = parsed.note;
+    }
+
     return ok(
       {
         configured: true,
@@ -291,6 +429,9 @@ exports.handler = async (event) => {
         live_floor_ooa,
         live_floor_note,
         live_floor_sheet_tab: liveFloorTabTitle,
+        intraday_ooa_leaders,
+        intraday_snapshot_note,
+        intraday_snapshot_tab: intradayTabTitle,
         fetched_at: new Date().toISOString(),
       },
       CACHE_SEC

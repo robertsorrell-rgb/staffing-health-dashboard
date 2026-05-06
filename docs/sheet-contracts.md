@@ -177,6 +177,15 @@ Rows are listed when the Adherence cell indicates **out of adherence**, e.g. tex
 
 ---
 
+## Live Floor Adherence — Intraday_Snapshot (AGENT DRILL-DOWN)
+
+**Same workbook** (`ADHERENCE_SPREADSHEET_ID`).  
+**Tab:** `ADHERENCE_INTRADAY_SNAPSHOT_TAB` (default **`Intraday_Snapshot`**). Optional: **`ADHERENCE_INTRADAY_SNAPSHOT_SHEET_GID`**, **`ADHERENCE_INTRADAY_SNAPSHOT_RANGE`**.
+
+The parser finds the **AGENT DRILL-DOWN** table header row whose columns include **`Agent`**, **`Manager`**, and **`Total OOA Mins Today`** (or similar total / OOA / mins / today wording). Body rows are read until an empty **Agent** cell. Reps are sorted by **Total OOA Mins Today** descending; everyone tied at the **maximum** gets dashboard highlighting (matches spreadsheet emphasis on top OOA totals).
+
+---
+
 ## Targeted VTO Bot — Offers tab
 
 **Workbook:** Targeted VTO Bot  

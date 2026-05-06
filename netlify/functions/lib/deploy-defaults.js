@@ -22,6 +22,8 @@ const DEFAULTS = {
   ADHERENCE_LIVE_FLOOR_TAB: 'Live Floor',
   /** Sheet `gid=` from the Live Floor tab URL (pins tab even if titles collide). */
   ADHERENCE_LIVE_FLOOR_SHEET_GID: '1939628111',
+  /** Intraday_Snapshot tab — AGENT DRILL-DOWN table (Agent, Manager, Total OOA Mins Today). */
+  ADHERENCE_INTRADAY_SNAPSHOT_TAB: 'Intraday_Snapshot',
   ADHERENCE_CACHE_SECONDS: '120',
   TARGETED_VTO_SPREADSHEET_ID: '1znBYs9PemirPw_is3b8Blj74wEz7Hb6iGH88DH2qWmU',
   TARGETED_VTO_TAB: 'Offers',

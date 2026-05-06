@@ -647,6 +647,23 @@ a.digest-link {
   font-size: 13px;
 }
 
+/** Live floor + intraday snapshot (two columns on wide screens). */
+.adh-live-floor-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: stretch;
+  margin-top: 12px;
+  margin-bottom: 14px;
+}
+.adh-live-floor-col {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.adh-intraday-block {
+  margin-top: 0;
+}
+
 /** Live floor OOA list (under adherence title). */
 .adh-live-floor-block {
   margin-top: 12px;
@@ -655,6 +672,10 @@ a.digest-link {
   background: var(--cream-alt);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+.adh-live-floor-col .adh-live-floor-block {
+  margin-top: 0;
+  height: 100%;
 }
 .adh-live-floor-heading {
   font-size: 11px;
@@ -693,6 +714,52 @@ a.digest-link {
 }
 .adh-live-floor-meta {
   margin: 8px 0 0;
+}
+
+.adh-intraday-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.adh-intraday-table th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-sec);
+  padding: 0 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.adh-intraday-table td {
+  padding: 8px 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.adh-intraday-table tr:last-child td {
+  border-bottom: none;
+}
+.adh-intraday-table .adh-intraday-agent {
+  font-weight: 700;
+  color: var(--navy);
+}
+.adh-intraday-table .adh-intraday-mgr {
+  color: var(--text-sec);
+  font-size: 12px;
+}
+.adh-intraday-table .adh-intraday-mins {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
+}
+.adh-intraday-table tr.adh-intraday-top-tier td {
+  background: rgba(232, 180, 48, 0.22);
+}
+.adh-intraday-table tr.adh-intraday-top-tier .adh-intraday-mins {
+  color: var(--red, #b00020);
 }
 
 .freshness-strip {
