@@ -104,6 +104,56 @@ async function getSheetValues(spreadsheetId, range, options = {}) {
   return res.data.values || [];
 }
 
+/**
+ * Resolve the exact tab title for A1 ranges when the configured name might not match
+ * (spacing/case) or when linking by sheet gid from the URL.
+ * @param {string} spreadsheetId
+ * @param {{ tabHint?: string, sheetGid?: string }} [opts]
+ * @returns {Promise<string>}
+ */
+async function resolveSpreadsheetTabTitle(spreadsheetId, opts = {}) {
+  const sheetsApi = getSheetsClient();
+  const res = await sheetsApi.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  const raw = res.data.sheets || [];
+  const list = raw
+    .map((s) => ({
+      title: String(s.properties?.title || '').trim(),
+      sheetId: s.properties?.sheetId,
+    }))
+    .filter((x) => x.title);
+
+  const gidStr = opts.sheetGid != null ? String(opts.sheetGid).trim() : '';
+  if (gidStr) {
+    const gn = parseInt(gidStr, 10);
+    if (Number.isFinite(gn)) {
+      const byGid = list.find((x) => x.sheetId === gn);
+      if (byGid) return byGid.title;
+    }
+  }
+
+  const want = String(opts.tabHint || '').trim();
+  const titles = list.map((x) => x.title);
+  if (want && titles.includes(want)) return want;
+  const wl = want.toLowerCase();
+  let hit = titles.find((t) => t.toLowerCase() === wl);
+  if (hit) return hit;
+  hit = titles.find(
+    (t) => t.toLowerCase().replace(/\s+/g, ' ') === wl.replace(/\s+/g, ' ')
+  );
+  if (hit) return hit;
+  hit = titles.find((t) => /overtime/i.test(t) && /review/i.test(t));
+  if (hit) return hit;
+
+  const preview =
+    titles.length > 30 ? `${titles.slice(0, 30).join(', ')}…` : titles.join(', ');
+  throw new Error(
+    `Sheet tab not found (hint "${want || 'none'}"). Available: ${preview || '(none)'}`
+  );
+}
+
 function parseSheetNumber(cell) {
   if (cell == null || cell === '') return null;
   const n = Number(String(cell).trim().replace(/,/g, ''));
@@ -111,16 +161,27 @@ function parseSheetNumber(cell) {
 }
 
 /**
- * Normalize a sheet cell to YYYY-MM-DD in America/Chicago.
- * Sheets serial datetimes must use the full fractional day and Chicago wall date
- * (floor-to-UTC was off-by-one vs CT for evening timestamps).
+ * Normalize a sheet cell to YYYY-MM-DD string for comparisons.
+ *
+ * **Numeric Sheets serial** (`UNFORMATTED_VALUE` + `SERIAL_NUMBER`): uses the Excel/Sheets
+ * calendar day — `Math.floor(serial)` whole days from 1899-12-30 UTC — formatted with **UTC**
+ * date components. Do **not** shift serial-derived instants into America/Chicago: midnight UTC
+ * for that serial is still the same spreadsheet calendar date the UI shows; Chicago formatting
+ * was shifting date-only cells back one day (e.g. 2026-05-05 → 2026-05-04).
+ *
+ * **Strings / Date.parse**: timestamps still interpreted in Chicago where we use `Date` + locale.
  */
 function normalizeDateCell(cell) {
   if (cell == null || cell === '') return null;
   if (typeof cell === 'number' && Number.isFinite(cell)) {
     const epochUtcMs = Date.UTC(1899, 11, 30);
-    const ms = epochUtcMs + cell * 86400000;
-    return new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    const wholeDays = Math.floor(cell);
+    const ms = epochUtcMs + wholeDays * 86400000;
+    const d = new Date(ms);
+    const y = d.getUTCFullYear();
+    const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const da = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${mo}-${da}`;
   }
   const s = String(cell).trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
@@ -195,6 +256,7 @@ function handleOptions(event) {
 module.exports = {
   getSheetsClient,
   getSheetValues,
+  resolveSpreadsheetTabTitle,
   parseSheetNumber,
   normalizeDateCell,
   ok,

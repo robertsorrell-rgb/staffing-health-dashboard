@@ -11,12 +11,11 @@ const API_BASE_DEFAULT = 'https://api.assembledhq.com/v0';
 const TZ = 'America/Chicago';
 
 const CAP_QUEUE_MAP = [
-  { queue: 'ISC_New', label: 'ISC', isISC: true },
-  { queue: 'High School_CC90_New', label: 'High School SC', isISC: false },
-  { queue: 'Elementary and LD_CC90_New', label: 'Elementary and LD SC', isISC: false },
-  { queue: 'College and Grad TP_CC90_New', label: 'College and Grad SC', isISC: false },
-  { queue: 'Adult Learner_CC90_New', label: 'Adult Learner SC', isISC: false },
-  { queue: 'Prof Certs_CC90_New', label: 'Prof Certs SC', isISC: false },
+  { queue: 'High School_CC90_New', label: 'High School SC' },
+  { queue: 'Elementary and LD_CC90_New', label: 'Elementary and LD SC' },
+  { queue: 'College and Grad TP_CC90_New', label: 'College and Grad SC' },
+  { queue: 'Adult Learner_CC90_New', label: 'Adult Learner SC' },
+  { queue: 'Prof Certs_CC90_New', label: 'Prof Certs SC' },
 ];
 
 const AGGREGATE_LABEL = 'Aggregate';
@@ -196,15 +195,15 @@ async function loadNetStaffingFromAssembled() {
   }
 
   buckets[AGGREGATE_LABEL] = {};
-  const nonIscLabels = CAP_QUEUE_MAP.filter((q) => !q.isISC).map((q) => q.label);
+  const aggregateLabels = CAP_QUEUE_MAP.map((q) => q.label);
   const hourSetAgg = new Set();
-  for (const lbl of nonIscLabels) {
+  for (const lbl of aggregateLabels) {
     for (const hr of Object.keys(buckets[lbl] || {})) hourSetAgg.add(parseInt(hr, 10));
   }
   for (const hr of hourSetAgg) {
     let sumAgg = 0;
     let parts = 0;
-    for (const lbl of nonIscLabels) {
+    for (const lbl of aggregateLabels) {
       const cell = buckets[lbl][hr];
       if (!cell || !cell.n) continue;
       sumAgg += cell.sum / cell.n;

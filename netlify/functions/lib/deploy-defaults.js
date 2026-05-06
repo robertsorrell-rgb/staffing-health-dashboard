@@ -32,6 +32,17 @@ const DEFAULTS = {
   CALLOUT_MAIN_TAB: 'Sheet1',
   CALLOUT_ATTENDANCE_TAB: 'Attendance Notification Log',
   CALLOUT_CACHE_SECONDS: '300',
+  /** Overtime Review workbook — open vs filled slots → hours (÷ OT_FILL_SLOT_DIVISOR). */
+  OT_FILL_SPREADSHEET_ID: '1N_k9DsnIws2wWq_p1_mLe7ra6PInQ9rNZGknlfPCxls',
+  OT_FILL_TAB: 'OVERTIME REVIEW',
+  /** From sheet URL gid=… — used first so the tab name does not have to match exactly. */
+  OT_FILL_SHEET_GID: '1000390321',
+  OT_FILL_SLOT_DIVISOR: '2',
+  OT_FILL_CACHE_SECONDS: '300',
+  /** Upcoming rows (date ≥ today CT) below this fill % appear in the dashboard early-warning list. */
+  OT_FILL_WARNING_MAX_PCT: '75',
+  /** Cap rows returned for early warning (payload size). */
+  OT_FILL_WARNING_MAX_ROWS: '150',
   ASSEMBLED_SITE_NAME: 'Consumer Sales',
   ASSEMBLED_CHANNEL: 'phone',
   ASSEMBLED_INTERVAL_SECONDS: '1800',

@@ -7,6 +7,25 @@ const { env } = require('./lib/deploy-defaults.js');
 
 const CACHE_SEC = parseInt(env('CALLOUT_CACHE_SECONDS'), 10);
 
+function salesGroupColumnIndex(headers) {
+  const lower = headers.map((h) => String(h || '').trim().toLowerCase());
+  const idx = lower.findIndex(
+    (h) => h === 'sales group' || h.includes('sales group') || h === 'sales_group'
+  );
+  return idx >= 0 ? idx : -1;
+}
+
+/** Drop rows with blank Sales Group (unscoped call-outs). */
+function filterRowsWithSalesGroup(headers, rows) {
+  const sg = salesGroupColumnIndex(headers);
+  if (sg < 0) return rows;
+  return rows.filter((row) => {
+    const v = row[sg];
+    if (v == null || v === '') return false;
+    return String(v).trim().length > 0;
+  });
+}
+
 exports.handler = async (event) => {
   const pre = handleOptions(event);
   if (pre) return pre;
@@ -26,20 +45,25 @@ exports.handler = async (event) => {
       attendance = await readSheetFilterToday(spreadsheetId, attendanceTab);
     }
 
+    const mainRows = filterRowsWithSalesGroup(main.headers, main.rowsToday);
+    const attRows = attendance
+      ? filterRowsWithSalesGroup(attendance.headers, attendance.rowsToday)
+      : null;
+
     return ok(
       {
         configured: true,
         today: main.today,
         call_out_main: {
-          rows_today: main.rowsToday.length,
+          rows_today: mainRows.length,
           headers: main.headers,
-          rows_preview: main.rowsToday.slice(0, 40),
+          rows_preview: mainRows.slice(0, 40),
         },
         attendance_notifications: attendance
           ? {
-              rows_today: attendance.rowsToday.length,
+              rows_today: attRows.length,
               headers: attendance.headers,
-              rows_preview: attendance.rowsToday.slice(0, 40),
+              rows_preview: attRows.slice(0, 40),
             }
           : null,
         fetched_at: new Date().toISOString(),

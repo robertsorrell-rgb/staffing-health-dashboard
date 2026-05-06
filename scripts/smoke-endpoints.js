@@ -54,6 +54,7 @@ async function run(name, modPath) {
   failed = !(await run('targeted-vto', path.join(root, 'targeted-vto.js'))) || failed;
   failed = !(await run('auto-vto', path.join(root, 'auto-vto.js'))) || failed;
   failed = !(await run('bobbot', path.join(root, 'bobbot.js'))) || failed;
+  failed = !(await run('ot-fill-rate', path.join(root, 'ot-fill-rate.js'))) || failed;
   failed = !(await run('net-staffing', path.join(root, 'net-staffing.js'))) || failed;
   process.exit(failed ? 1 : 0);
 })().catch((e) => {

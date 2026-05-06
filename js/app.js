@@ -1,6 +1,33 @@
 import { heatmapBandClass } from './heatmap-bands.js';
 import { mergeCombinedByGroupRows } from './vto-canonical-sales-group.js';
 
+/** Short weekday (Intl en-US in Chicago) → compact abbrev (shared: OT early warning + VTO week range). */
+const OT_WARN_WEEKDAY_ABBREV = {
+  Sun: 'Su',
+  Mon: 'M',
+  Tue: 'Tu',
+  Wed: 'We',
+  Thu: 'Th',
+  Fri: 'Fr',
+  Sat: 'Sa',
+};
+
+/** YYYY-MM-DD → "M, 5/6" / "Sa, 5/9" (Chicago weekday + M/D, no leading zeros). */
+function fmtOtWarnDayCt(ymd) {
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd || '—';
+  const parts = ymd.split('-');
+  const year = parseInt(parts[0], 10);
+  const mo = parseInt(parts[1], 10);
+  const da = parseInt(parts[2], 10);
+  const ms = Date.UTC(year, mo - 1, da, 18, 0, 0);
+  const shortWd = new Date(ms).toLocaleDateString('en-US', {
+    weekday: 'short',
+    timeZone: 'America/Chicago',
+  });
+  const abbr = OT_WARN_WEEKDAY_ABBREV[shortWd] || shortWd;
+  return `${abbr}, ${mo}/${da}`;
+}
+
 const REFRESH_MS = parseInt(
   typeof window.__REFRESH_MS__ === 'number' ? window.__REFRESH_MS__ : 150000,
   10
@@ -14,6 +41,7 @@ const ENDPOINTS = [
   ['auto-vto', '/api/auto-vto'],
   ['bobbot', '/api/bobbot'],
   ['callout', '/api/callout'],
+  ['ot-fill-rate', '/api/ot-fill-rate'],
 ];
 
 /** Prefer human-readable columns; skip internal-id headers where possible. */
@@ -27,6 +55,36 @@ const PREVIEW_BOBBOT = {
   pick: 'bobbot-pto',
   skip: [/request.?key/i, /^pid[:|]/i, /employee.?key/i],
 };
+
+/** Bobbot `queue` / sales-group strings → CS_Hourly_Log group keys for `groups_by_day` averaging. */
+const BOBBOT_QUEUE_IDLE_RULES = [
+  {
+    cohort: 'Adult Learning',
+    groups: ['Core Test Group', 'Languages Test Group'],
+    test: (q) => /adult learner/i.test(q),
+  },
+  {
+    cohort: 'College / grad',
+    groups: ['STEM College Test Group', 'Graduate Test Prep'],
+    test: (q) => /college\s+and\s+grad|college.*grad\s+tp/i.test(q),
+  },
+  {
+    cohort: 'Elementary / LD',
+    groups: ['K-6 Test Group', 'Learning Differences Test Group'],
+    test: (q) => /elementary\s+and\s+ld|elementary.*\s+ld/i.test(q),
+  },
+  {
+    cohort: 'High school',
+    groups: ['STEM High School Test Group', 'K12 Test Prep'],
+    test: (q) => /high\s+school/i.test(q),
+  },
+];
+
+/** Intraday PTO reach-out suggestions start at this hour (Central). */
+const BOBBOT_REACHOUT_START_HOUR_CT = 11;
+
+/** Recommend reach-out when blended idle % for mapped groups is at least this (full day, CT sheet date). */
+const BOBBOT_REACHOUT_IDLE_MIN_PCT = 40;
 const PREVIEW_CALLOUT = {
   preferred: ['timestamp', 'agent', 'name', 'manager', 'queue', 'reason', 'status', 'date'],
   skip: [],
@@ -78,6 +136,52 @@ function sortedIdleGroupEntries(rawMap) {
   return Object.entries(merged).sort((a, b) => (b[1] || 0) - (a[1] || 0));
 }
 
+function currentCTHourBrowser() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(new Date());
+  const h = parts.find((p) => p.type === 'hour');
+  return h ? parseInt(h.value, 10) : 0;
+}
+
+function averageIdlePercentsFromMap(groupsByDay, groupKeys) {
+  const vals = groupKeys
+    .map((k) => groupsByDay[k])
+    .filter((v) => v != null && !Number.isNaN(Number(v)))
+    .map((v) => Number(v));
+  if (!vals.length) return null;
+  return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+}
+
+/** Map Bobbot queue label → weighted idle % from idle API `groups_by_day` (raw keys, not merged labels). */
+function bobbotQueueDayIdlePct(queue, groupsByDay) {
+  if (!groupsByDay || typeof groupsByDay !== 'object') {
+    return { pct: null, cohort: null };
+  }
+  const q = String(queue || '').trim();
+  if (!q) return { pct: null, cohort: null };
+  for (const rule of BOBBOT_QUEUE_IDLE_RULES) {
+    if (rule.test(q)) {
+      const pct = averageIdlePercentsFromMap(groupsByDay, rule.groups);
+      return { pct, cohort: rule.cohort };
+    }
+  }
+  const direct = groupsByDay[q];
+  if (direct != null && !Number.isNaN(Number(direct))) {
+    return { pct: Number(direct), cohort: null };
+  }
+  const qLow = q.toLowerCase();
+  for (const key of Object.keys(groupsByDay)) {
+    if (key.trim().toLowerCase() === qLow) {
+      const v = groupsByDay[key];
+      if (v != null && !Number.isNaN(Number(v))) return { pct: Number(v), cohort: null };
+    }
+  }
+  return { pct: null, cohort: null };
+}
+
 /** Idle emphasis: ≥30% yellow, ≥40% orange, ≥50% red (strongest band wins). */
 function idlePctBandClassForValue(p) {
   if (p == null || p === '' || Number.isNaN(Number(p))) return '';
@@ -88,6 +192,15 @@ function idlePctBandClassForValue(p) {
   return '';
 }
 
+/** OT fill %: below 70% red, 70–89.9% yellow, 90%+ green. */
+function otFillPctBandClass(p) {
+  if (p == null || p === '' || Number.isNaN(Number(p))) return '';
+  const n = Number(p);
+  if (n < 70) return 'ot-fill-pct-red';
+  if (n < 90) return 'ot-fill-pct-yellow';
+  return 'ot-fill-pct-green';
+}
+
 function formatTime(iso) {
   if (!iso) return '—';
   try {
@@ -96,6 +209,25 @@ function formatTime(iso) {
   } catch {
     return iso;
   }
+}
+
+/** Calendar YYYY-MM-DD in America/Chicago (matches backend `todayCTDateStr`). */
+function todayISOChicago() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+}
+
+function idleGroupListHtml(entries, heading) {
+  if (!entries.length) return '';
+  const lis = entries
+    .map(([g, p]) => {
+      const band = idlePctBandClassForValue(p);
+      const cls = band ? ` class="${band}"` : '';
+      return `<li${cls}>${escapeHtml(g)}: ${p != null ? p + '%' : '—'}</li>`;
+    })
+    .join('');
+  return (
+    `<div class="panel-sub" style="margin-top:10px;">${escapeHtml(heading)}</div>` + `<ul class="idle-group-list">${lis}</ul>`
+  );
 }
 
 async function fetchJson(url) {
@@ -112,27 +244,7 @@ async function fetchJson(url) {
   return data;
 }
 
-function netStaffingMetaHtml(payload, fetchError) {
-  const meta = document.getElementById('net-staffing-meta');
-  if (!meta) return;
-  if (fetchError) {
-    meta.textContent = '';
-    return;
-  }
-  const src =
-    payload?.source === 'assembled'
-      ? 'Assembled API'
-      : payload?.source === 'sheet'
-        ? 'Capacity Pull sheet'
-        : '';
-  const ft = payload?.fetched_at ? formatTime(payload.fetched_at) : '';
-  const bits = [];
-  if (src) bits.push(`Source: ${src}`);
-  if (ft) bits.push(`Fetched ${ft}`);
-  meta.textContent = bits.join(' · ');
-}
-
-function renderHeatmap(container, payload, options = {}) {
+function renderHeatmap(container, payload) {
   container.innerHTML = '';
   if (!payload.ok || !payload.matrix || !payload.matrix.length) {
     container.innerHTML = `<p class="panel-muted" style="padding:16px;">${
@@ -141,12 +253,7 @@ function renderHeatmap(container, payload, options = {}) {
     }</p>`;
     return;
   }
-  const allHours = payload.hours || [];
-  let hours = allHours;
-  if (!options.extendedHours && allHours.length) {
-    const clipped = allHours.filter((h) => h >= 7 && h <= 19);
-    if (clipped.length) hours = clipped;
-  }
+  const hours = payload.hours || [];
   const table = document.createElement('table');
   table.className = 'heatmap-table';
   const thead = document.createElement('thead');
@@ -157,7 +264,7 @@ function renderHeatmap(container, payload, options = {}) {
   trh.appendChild(corner);
   for (const h of hours) {
     const th = document.createElement('th');
-    th.textContent = `${String(h).padStart(2, '0')}:00`;
+    th.textContent = formatSparklineHour12(h);
     trh.appendChild(th);
   }
   thead.appendChild(trh);
@@ -167,7 +274,8 @@ function renderHeatmap(container, payload, options = {}) {
     const tr = document.createElement('tr');
     const td0 = document.createElement('td');
     td0.textContent = row.group;
-    td0.className = 'row-label';
+    const isAggregate = /^aggregate$/i.test(String(row.group || '').trim());
+    td0.className = isAggregate ? 'row-label row-label-aggregate' : 'row-label';
     tr.appendChild(td0);
     for (const h of hours) {
       const td = document.createElement('td');
@@ -186,7 +294,7 @@ function renderHeatmap(container, payload, options = {}) {
   }
   table.appendChild(tbody);
   const wrap = document.createElement('div');
-  wrap.style.padding = '12px 16px 16px';
+  wrap.className = 'heatmap-table-wrap';
   wrap.appendChild(table);
   container.appendChild(wrap);
 }
@@ -483,10 +591,10 @@ function tablePreview(headers, rows, maxCols = 6) {
 }
 
 /**
- * Bobbot / PTO preview: four columns with stable labels.
- * @returns {{ indices: number[], labels: string[] }}
+ * Column indices for Bobbot_History rows (Name, Sales group / queue, Decision, Manager).
+ * @returns {{ nameI: number, queueI: number, statusI: number, mgrI: number }}
  */
-function pickBobbotPtoIndices(headers) {
+function resolveBobbotPtoColumns(headers) {
   const lower = headers.map((h) => String(h || '').trim().toLowerCase());
   const used = new Set();
   const skip = (h) =>
@@ -535,6 +643,16 @@ function pickBobbotPtoIndices(headers) {
   );
 
   const mgrI = takeFirst((h) => h.includes('manager') || h.includes('supervisor'));
+
+  return { nameI, queueI, statusI, mgrI };
+}
+
+/**
+ * Bobbot / PTO preview: four columns with stable labels.
+ * @returns {{ indices: number[], labels: string[] }}
+ */
+function pickBobbotPtoIndices(headers) {
+  const { nameI, queueI, statusI, mgrI } = resolveBobbotPtoColumns(headers);
 
   const indices = [];
   const labels = [];
@@ -695,9 +813,12 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     body += `</section>`;
 
     body += `<section class="vto-scope vto-scope-week vto-split-col" aria-labelledby="vto-head-week">`;
-    const weekMetaLine = combinedWeek.label
-      ? `${combinedWeek.label} · Sun–Sat (CT)`
-      : 'Sun–Sat · Central Time';
+    const weekMetaLine =
+      combinedWeek.week_start && combinedWeek.week_end
+        ? `${fmtOtWarnDayCt(combinedWeek.week_start)} – ${fmtOtWarnDayCt(combinedWeek.week_end)} · Sun–Sat (CT)`
+        : combinedWeek.label
+          ? `${combinedWeek.label} · Sun–Sat (CT)`
+          : 'Sun–Sat · Central Time';
     body += `<h3 class="vto-period-title" id="vto-head-week"><span class="vto-period-label">This week</span><span class="vto-period-meta">${escapeHtml(weekMetaLine)}</span></h3>`;
     if (combinedWeek.targeted_fetch_error) {
       body += `<p class="panel-error">Offers tab (week): ${escapeHtml(combinedWeek.targeted_fetch_error)}</p>`;
@@ -717,6 +838,337 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       ${errMsg ? `<p class="panel-error">${escapeHtml(errMsg)}</p>` : ''}
       ${data.configured === false && !errMsg ? `<p class="panel-muted">${data.note || 'Not configured'}</p>` : ''}
       ${body}
+    </div>
+  `;
+}
+
+function htmlBobbotReachoutsColumn(bobbotData, bobbotErr, idleData, idleErr) {
+  if (currentCTHourBrowser() < BOBBOT_REACHOUT_START_HOUR_CT) {
+    const hr = BOBBOT_REACHOUT_START_HOUR_CT;
+    return `<div class="idle-split-col bobbot-reachouts-col"><div class="idle-split-heading">Intraday reach-outs</div><p class="panel-muted" style="font-size:12px;line-height:1.45;margin-top:4px;">Suggested manager touchpoints for denied PTO when the floor is loose enough to approve intraday.</p><p class="panel-muted" style="font-size:11px;margin-top:10px;line-height:1.4;"><strong>${hr}:00 AM CT</strong> or later — check back then (idle ≥${BOBBOT_REACHOUT_IDLE_MIN_PCT}% vs CS_Hourly_Log).</p></div>`;
+  }
+
+  if (bobbotErr || bobbotData?.configured === false) {
+    return `<div class="idle-split-col bobbot-reachouts-col"><div class="idle-split-heading">Intraday reach-outs</div><p class="panel-muted">Bobbot data unavailable.</p></div>`;
+  }
+
+  if (idleErr) {
+    return `<div class="idle-split-col bobbot-reachouts-col"><div class="idle-split-heading">Intraday reach-outs</div><p class="panel-muted">Idle data unavailable.</p></div>`;
+  }
+
+  if (idleData?.note) {
+    return `<div class="idle-split-col bobbot-reachouts-col"><div class="idle-split-heading">Intraday reach-outs</div><p class="panel-muted">${escapeHtml(String(idleData.note))}</p></div>`;
+  }
+
+  const headers = bobbotData.headers || [];
+  const rows = bobbotData.rows_preview || [];
+  const { nameI, queueI, statusI, mgrI } = resolveBobbotPtoColumns(headers);
+  const gd = idleData.groups_by_day || {};
+
+  const suggestions = [];
+  for (const row of rows) {
+    const status = String(row[statusI] ?? '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ');
+    if (status !== 'DENIED') continue;
+    const queue = String(row[queueI] ?? '').trim();
+    const { pct, cohort } = bobbotQueueDayIdlePct(queue, gd);
+    if (pct == null || pct < BOBBOT_REACHOUT_IDLE_MIN_PCT) continue;
+    const name = String(row[nameI] ?? '').trim() || '—';
+    const mgr = String(row[mgrI] ?? '').trim() || '—';
+    suggestions.push({ name, mgr, queue, pct, cohort });
+  }
+
+  let body = '';
+  if (!suggestions.length) {
+    body = `<p class="panel-muted">No suggestions — no denied PTO with mapped full-day idle ≥${BOBBOT_REACHOUT_IDLE_MIN_PCT}%.</p>`;
+  } else {
+    const lis = suggestions
+      .map((s) => {
+        const cohortNote = s.cohort ? ` · ${escapeHtml(s.cohort)} blend` : '';
+        const band = idlePctBandClassForValue(s.pct);
+        const cls = band ? ` class="${band}"` : '';
+        return `<li${cls}><strong>${escapeHtml(s.name)}</strong> · ${escapeHtml(s.queue)} · idle <strong>${s.pct}%</strong> (day${cohortNote}) — Tell <strong>${escapeHtml(s.mgr)}</strong> intraday PTO may be approvable.</li>`;
+      })
+      .join('');
+    body = `<ul class="bobbot-reachout-list">${lis}</ul>`;
+  }
+
+  const sub = `Denied PTO only · full-day idle vs CS_Hourly_Log · ≥${BOBBOT_REACHOUT_IDLE_MIN_PCT}% · from ${BOBBOT_REACHOUT_START_HOUR_CT}:00 CT`;
+  return `<div class="idle-split-col bobbot-reachouts-col"><div class="idle-split-heading">Intraday reach-outs</div><p class="panel-muted" style="font-size:11px;margin-bottom:8px;line-height:1.35;">${escapeHtml(sub)}</p>${body}</div>`;
+}
+
+/** Bobbot card: denied PTO table + idle-driven reach-out suggestions (split like Idle / VTO). */
+function bobbotPtoPanel(data, errMsg, idleData, idleErr) {
+  const id = 'panel-bobbot-pto';
+  const hasPreviewRows = !!(data.rows_preview && data.rows_preview.length);
+  const prev =
+    data.headers && data.rows_preview && hasPreviewRows
+      ? tablePreviewPick(data.headers, data.rows_preview, PREVIEW_BOBBOT)
+      : '';
+  const hint = data.today_hint
+    ? `<p class="panel-muted" style="margin-top:6px;line-height:1.35;">${escapeHtml(data.today_hint)}</p>`
+    : '';
+  const emptyToday =
+    data.configured !== false && !errMsg && !hasPreviewRows && !data.today_hint
+      ? `<p class="panel-muted" style="margin-top:8px;">No sheet rows for today (CT) in this preview.</p>`
+      : '';
+  const cfgHint = data.configuration_hint
+    ? `<p class="panel-muted" style="margin-top:6px;font-size:11px;color:var(--amber);font-weight:600;">${escapeHtml(data.configuration_hint)}</p>`
+    : '';
+
+  const leftBlock =
+    (errMsg ? `<p class="panel-error">${escapeHtml(errMsg)}</p>` : '') +
+    (data.configured === false && !errMsg ? `<p class="panel-muted">${escapeHtml(data.note || 'Not configured')}</p>` : '') +
+    hint +
+    emptyToday +
+    prev;
+
+  return `
+    <div class="panel-card panel-exception" id="${id}">
+      <div class="panel-title">PTO</div>
+      ${cfgHint}
+      <div class="idle-split bobbot-pto-split">
+        <div class="idle-split-col">
+          <div class="idle-split-heading">Today's decisions</div>
+          ${leftBlock}
+        </div>
+        ${htmlBobbotReachoutsColumn(data, errMsg, idleData, idleErr)}
+      </div>
+    </div>
+  `;
+}
+
+function otFillSortValue(entry) {
+  if (entry && typeof entry === 'object' && entry.fill_pct != null) return Number(entry.fill_pct);
+  if (typeof entry === 'number') return entry;
+  return -1;
+}
+
+function fmtOtHours(x) {
+  if (x == null || Number.isNaN(Number(x))) return '—';
+  const n = Math.round(Number(x) * 10) / 10;
+  return Number.isInteger(n) ? String(n) : String(n);
+}
+
+/** Head + table fragments for paired layout (hours-style symmetry). */
+function htmlOtFillEarlyWarningParts(ot, warnArr, maxPct) {
+  if (!Array.isArray(warnArr)) return null;
+  const thresh = Number.isFinite(Number(maxPct)) ? Number(maxPct) : 75;
+
+  let tbody = '';
+  if (warnArr.length === 0) {
+    const colspan = ot.units === 'hours' ? 4 : 3;
+    tbody = `<tr><td colspan="${colspan}" class="panel-muted" style="font-style:italic;padding:10px 8px;">None — no upcoming rows below ${escapeHtml(String(thresh))}%.</td></tr>`;
+  } else if (ot.units === 'hours') {
+    tbody = warnArr
+      .map((w) => {
+        const band = otFillPctBandClass(w.fill_pct);
+        const cls = band ? ` class="${band}"` : '';
+        const pctStr = w.fill_pct != null ? `${escapeHtml(String(w.fill_pct))}%` : '—';
+        return `<tr${cls}><td>${escapeHtml(fmtOtWarnDayCt(w.date))}</td><td>${escapeHtml(String(w.group))}</td><td class="num">${escapeHtml(fmtOtHours(w.hours_open))}</td><td class="num">${pctStr}</td></tr>`;
+      })
+      .join('');
+  } else {
+    tbody = warnArr
+      .map((w) => {
+        const band = otFillPctBandClass(w.fill_pct);
+        const cls = band ? ` class="${band}"` : '';
+        const pctStr = w.fill_pct != null ? `${escapeHtml(String(w.fill_pct))}%` : '—';
+        return `<tr${cls}><td>${escapeHtml(fmtOtWarnDayCt(w.date))}</td><td>${escapeHtml(String(w.group))}</td><td class="num">${pctStr}</td></tr>`;
+      })
+      .join('');
+  }
+
+  const hoursWarn = ot.units === 'hours';
+  const thead = hoursWarn
+    ? '<tr><th>Date</th><th>Group</th><th class="num">Open (h)</th><th class="num">%</th></tr>'
+    : '<tr><th>Date</th><th>Group</th><th class="num">%</th></tr>';
+
+  const tblCls = hoursWarn
+    ? 'preview-table ot-fill-table ot-fill-warn-table ot-fill-warn-table--hours'
+    : 'preview-table ot-fill-table ot-fill-warn-table';
+
+  const headHtml = `<div class="ot-fill-head-block ot-fill-warn-head-block"><div class="panel-sub ot-fill-warn-heading ot-fill-early-warn-subhead">Early warning (&lt;${escapeHtml(String(thresh))}%)</div></div>`;
+
+  const tableInner = `<div class="preview-table-wrap ot-fill-warn-table-wrap"><table class="${tblCls}"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+
+  const afterTable =
+    ot.fill_warnings_omitted > 0
+      ? `<p class="panel-muted ot-fill-warn-omit">+${escapeHtml(String(ot.fill_warnings_omitted))} more not shown.</p>`
+      : '';
+
+  return { headHtml, tableInner, afterTable };
+}
+
+/** Legacy: full warn column when not using paired hours layout. */
+function htmlOtFillEarlyWarningColumn(ot, warnArr, maxPct) {
+  const parts = htmlOtFillEarlyWarningParts(ot, warnArr, maxPct);
+  if (!parts) return '';
+  return `<div class="idle-split-col ot-fill-warn-col">${parts.headHtml}${parts.tableInner}${parts.afterTable}</div>`;
+}
+
+function htmlOtFillColumn(ot, otErr) {
+  if (otErr) {
+    return `<p class="panel-error">${escapeHtml(otErr)}</p>`;
+  }
+  if (!ot || ot.configured === false) {
+    return `<p class="panel-muted">${escapeHtml(ot?.note || 'OT fill not configured — set OT_FILL_TAB on the Functions env.')}</p>`;
+  }
+
+  const warnArr = Array.isArray(ot.fill_warnings) ? ot.fill_warnings : null;
+  const hasWarnPanel = warnArr != null;
+  const warnMaxPct = ot.fill_warning_max_pct;
+
+  const hasTodayGroups = !!(ot.by_group && Object.keys(ot.by_group).length);
+  const hasFutureWarnRows = !!(warnArr && warnArr.length);
+  if (ot.note && !hasTodayGroups && !hasFutureWarnRows) {
+    return `<p class="panel-muted">${escapeHtml(String(ot.note))}</p>`;
+  }
+
+  const entries = Object.entries(ot.by_group || {}).sort(
+    (a, b) => otFillSortValue(b[1]) - otFillSortValue(a[1])
+  );
+  if (!entries.length && !ot.note && !hasFutureWarnRows) {
+    return `<p class="panel-muted">No OT fill rows for today (CT).</p>`;
+  }
+
+  const firstRow = entries[0]?.[1];
+  const hoursShape =
+    ot.units === 'hours' ||
+    (firstRow && typeof firstRow === 'object' && firstRow.hours_open != null) ||
+    !!(warnArr && warnArr.some((w) => w && w.hours_open != null));
+
+  let floorBlock = '';
+  if (hoursShape && ot.floor_hours_open != null && ot.floor_hours_filled != null) {
+    const pct =
+      ot.floor_fill_pct != null
+        ? ` · ${escapeHtml(String(ot.floor_fill_pct))}% filled`
+        : '';
+    const fb = otFillPctBandClass(ot.floor_fill_pct);
+    const fbCls = fb ? ` ot-fill-floor-line ${fb}` : '';
+    floorBlock = `<div class="panel-sub${fbCls}" style="margin-top:4px;">Floor: <strong>${escapeHtml(fmtOtHours(ot.floor_hours_filled))}h</strong> filled · <strong>${escapeHtml(fmtOtHours(ot.floor_hours_open))}h</strong> open${pct}</div>`;
+  } else if (ot.floor_fill_pct != null) {
+    const fb = otFillPctBandClass(ot.floor_fill_pct);
+    const fbCls = fb ? ` ot-fill-floor-line ${fb}` : '';
+    floorBlock = `<div class="panel-sub${fbCls}" style="margin-top:4px;">Floor OT fill: <strong>${escapeHtml(String(ot.floor_fill_pct))}%</strong></div>`;
+  }
+
+  let body = '';
+  if (hoursShape && entries.length) {
+    const rows = entries
+      .map(([g, row]) => {
+        const o = row && typeof row === 'object' ? row : null;
+        if (!o || o.hours_open == null) return '';
+        const band = otFillPctBandClass(o.fill_pct);
+        const cls = band ? ` class="${band}"` : '';
+        const pctStr = o.fill_pct != null ? `${escapeHtml(String(o.fill_pct))}%` : '—';
+        return `<tr${cls}><td>${escapeHtml(g)}</td><td class="num">${escapeHtml(fmtOtHours(o.hours_filled))}</td><td class="num">${escapeHtml(fmtOtHours(o.hours_open))}</td><td class="num">${pctStr}</td></tr>`;
+      })
+      .join('');
+    body = `<div class="panel-sub ot-fill-paired-subhead ot-fill-today-subhead" style="margin-top:10px;">TODAY</div><div class="preview-table-wrap"><table class="preview-table ot-fill-table ot-fill-main-table--hours"><thead><tr><th>Group</th><th class="num">Filled (h)</th><th class="num">Open (h)</th><th class="num">%</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  } else if (entries.length) {
+    const lis = entries
+      .map(([g, p]) => {
+        const band = otFillPctBandClass(typeof p === 'number' ? p : null);
+        const cls = band ? ` class="${band}"` : '';
+        const disp = p != null && typeof p === 'number' ? escapeHtml(String(p)) + '%' : '—';
+        return `<li${cls}>${escapeHtml(g)}: ${disp}</li>`;
+      })
+      .join('');
+    body = `<div class="panel-sub ot-fill-paired-subhead ot-fill-today-subhead" style="margin-top:10px;">TODAY</div><ul class="idle-group-list ot-fill-group-list">${lis}</ul>`;
+  }
+
+  const noteAbove = ot.note && entries.length ? `<p class="panel-muted" style="font-size:11px;margin-bottom:6px;">${escapeHtml(String(ot.note))}</p>` : '';
+
+  const usePairedHoursTables = hasWarnPanel && hoursShape;
+  const todayStub =
+    !entries.length && hasWarnPanel && !usePairedHoursTables
+      ? `<p class="panel-muted" style="margin-top:2px;font-size:12px;">No OT rows for <strong>today</strong> (CT).</p>`
+      : '';
+
+  if (usePairedHoursTables) {
+    const warnParts = htmlOtFillEarlyWarningParts(ot, warnArr, warnMaxPct);
+    const rowHtml = entries.length
+      ? entries
+          .map(([g, row]) => {
+            const o = row && typeof row === 'object' ? row : null;
+            if (!o || o.hours_open == null) return '';
+            const band = otFillPctBandClass(o.fill_pct);
+            const cls = band ? ` class="${band}"` : '';
+            const pctStr = o.fill_pct != null ? `${escapeHtml(String(o.fill_pct))}%` : '—';
+            return `<tr${cls}><td>${escapeHtml(g)}</td><td class="num">${escapeHtml(fmtOtHours(o.hours_filled))}</td><td class="num">${escapeHtml(fmtOtHours(o.hours_open))}</td><td class="num">${pctStr}</td></tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="4" class="panel-muted" style="font-style:italic;padding:10px 8px;">No OT rows for <strong>today</strong> (CT).</td></tr>`;
+
+    const mainSubhead = `<div class="ot-fill-head-block"><div class="panel-sub ot-fill-paired-subhead ot-fill-today-subhead">TODAY</div></div>`;
+    const mainTable = `<div class="preview-table-wrap"><table class="preview-table ot-fill-table ot-fill-main-table--hours"><thead><tr><th>Group</th><th class="num">Filled (h)</th><th class="num">Open (h)</th><th class="num">%</th></tr></thead><tbody>${rowHtml}</tbody></table></div>`;
+
+    const paired =
+      warnParts != null
+        ? `<div class="ot-fill-paired">
+        <div class="idle-split ot-fill-paired-head">
+          <div class="idle-split-col ot-fill-main-col">${mainSubhead}</div>
+          <div class="idle-split-col ot-fill-warn-col">${warnParts.headHtml}</div>
+        </div>
+        <div class="idle-split ot-fill-inner-split ot-fill-inner-split--tables">
+          <div class="idle-split-col ot-fill-main-col">${mainTable}${floorBlock}</div>
+          <div class="idle-split-col ot-fill-warn-col">${warnParts.tableInner}${warnParts.afterTable}</div>
+        </div>
+      </div>`
+        : '';
+
+    return `${noteAbove}${todayStub}${paired || floorBlock}`;
+  }
+
+  const mainCol = `<div class="idle-split-col ot-fill-main-col">${noteAbove}${todayStub}${body}${floorBlock}</div>`;
+  const earlyCol = hasWarnPanel ? htmlOtFillEarlyWarningColumn(ot, warnArr, warnMaxPct) : '';
+  const inner =
+    earlyCol !== ''
+      ? `<div class="idle-split ot-fill-inner-split">${mainCol}${earlyCol}</div>`
+      : `${noteAbove}${todayStub}${body}${floorBlock}`;
+
+  return `${inner}`;
+}
+
+/** Full-width card: call-out (left) + Overtime Stats (right). */
+function calloutOtSplitPanel(co, coErr, ot, otErr) {
+  const hasPreviewRows = !!(co.call_out_main?.rows_preview?.length);
+  const prev =
+    co.call_out_main?.headers && hasPreviewRows
+      ? tablePreviewPick(co.call_out_main.headers, co.call_out_main.rows_preview, PREVIEW_CALLOUT)
+      : '';
+  const coRows =
+    (co.call_out_main?.rows_today ?? 0) + (co.attendance_notifications?.rows_today ?? 0);
+  const n = co.configured === false && !coErr ? '—' : coRows;
+  const emptyToday =
+    co.configured !== false && !coErr && !hasPreviewRows && !co.today_hint
+      ? `<p class="panel-muted" style="margin-top:8px;">No sheet rows for today (CT) in this preview.</p>`
+      : '';
+
+  const left =
+    (coErr ? `<p class="panel-error">${escapeHtml(coErr)}</p>` : '') +
+    `<div class="panel-sub">Today: <strong>${n}</strong></div>` +
+    (co.configured === false && !coErr ? `<p class="panel-muted">${escapeHtml(co.note || 'Not configured')}</p>` : '') +
+    emptyToday +
+    prev;
+
+  const right = htmlOtFillColumn(ot, otErr);
+
+  return `
+    <div class="panel-card panel-exception" id="panel-callout-ot">
+      <div class="idle-split callout-ot-split">
+        <div class="idle-split-col">
+          <div class="exception-col-title">Call out and attendance</div>
+          ${left}
+        </div>
+        <div class="idle-split-col">
+          <div class="exception-col-title">Overtime stats</div>
+          ${right}
+        </div>
+      </div>
     </div>
   `;
 }
@@ -760,18 +1212,11 @@ function exceptionPanel(name, data, errMsg, previewPrefs = null) {
   `;
 }
 
-function isHeatmapExtended() {
-  const el = document.getElementById('heatmap-extended');
-  return !!(el && el.checked);
-}
-
 let lastFetched = {};
 
-async function loadAll() {
-  const freshness = document.getElementById('freshness-strip');
+async function fetchLiveDashboard() {
   const results = {};
   const errors = {};
-
   await Promise.all(
     ENDPOINTS.map(async ([key, url]) => {
       try {
@@ -783,20 +1228,15 @@ async function loadAll() {
       }
     })
   );
+  return { results, errors };
+}
 
-  freshness.innerHTML = ENDPOINTS.map(([key]) => {
-    const t = lastFetched[key];
-    return `<span class="freshness-item"><strong>${key}</strong>: ${t ? formatTime(t) : `<span style="color:var(--red)">${errors[key] || 'error'}</span>`}</span>`;
-  }).join('');
-
+function applyDashboardData(results, errors) {
   const nsPayload = results['net-staffing'] || {
     ok: false,
     note: errors['net-staffing'] || 'No data',
   };
-  netStaffingMetaHtml(nsPayload, errors['net-staffing']);
-  renderHeatmap(document.getElementById('net-staffing-mount'), nsPayload, {
-    extendedHours: isHeatmapExtended(),
-  });
+  renderHeatmap(document.getElementById('net-staffing-mount'), nsPayload);
 
   const idle = results['idle-hourly-log'];
   const idleHourKpi = document.getElementById('idle-hour-kpi');
@@ -806,21 +1246,6 @@ async function loadAll() {
   const idleSplit = document.getElementById('idle-split');
   const idleParseNote = document.getElementById('idle-parse-note');
   const idleErr = document.getElementById('idle-err');
-
-  function idleGroupListHtml(entries, heading) {
-    if (!entries.length) return '';
-    const lis = entries
-      .map(([g, p]) => {
-        const band = idlePctBandClassForValue(p);
-        const cls = band ? ` class="${band}"` : '';
-        return `<li${cls}>${escapeHtml(g)}: ${p != null ? p + '%' : '—'}</li>`;
-      })
-      .join('');
-    return (
-      `<div class="panel-sub" style="margin-top:10px;">${escapeHtml(heading)}</div>` +
-      `<ul class="idle-group-list">${lis}</ul>`
-    );
-  }
 
   if (errors['idle-hourly-log']) {
     idleErr.hidden = false;
@@ -877,11 +1302,23 @@ async function loadAll() {
   if (errors['adherence']) {
     adhErr.hidden = false;
     adhErr.textContent = errors['adherence'];
+    const adhStats = document.getElementById('adh-stats');
+    if (adhStats) {
+      adhStats.textContent = '';
+      adhStats.hidden = true;
+    }
   } else {
     adhErr.hidden = true;
-    document.getElementById('adh-stats').textContent = adh?.configured
-      ? `Ping 1 today: ${adh.ping1_today} · Ping 2 today: ${adh.ping2_today}`
-      : adh?.note || 'Adherence source not configured';
+    const adhStats = document.getElementById('adh-stats');
+    if (adhStats) {
+      if (adh?.configured) {
+        adhStats.textContent = '';
+        adhStats.hidden = true;
+      } else {
+        adhStats.hidden = false;
+        adhStats.textContent = adh?.note || 'Adherence source not configured';
+      }
+    }
     const tm = adh?.top_managers || [];
     document.getElementById('adh-managers').textContent =
       tm.length > 0 ? `Top managers by alerts: ${tm.map((m) => `${m.name} (${m.count})`).join(', ')}` : '';
@@ -895,29 +1332,86 @@ async function loadAll() {
   }
 
   const co = results['callout'] || {};
-  const coRows =
-    (co.call_out_main?.rows_today ?? 0) + (co.attendance_notifications?.rows_today ?? 0);
-  document.getElementById('exceptions-grid').innerHTML = [
-    targetedVtoPanel(
-      results['targeted-vto'] || {},
-      errors['targeted-vto'],
-      results['auto-vto'] || {},
-      errors['auto-vto']
-    ),
-    exceptionPanel('Bobbot (PTO)', results['bobbot'] || {}, errors['bobbot'], PREVIEW_BOBBOT),
-    exceptionPanel(
-      'Call-out & attendance',
-      {
-        configured: co.configured,
-        note: co.note,
-        summary: { rows_today: coRows },
-        headers: co.call_out_main?.headers,
-        rows_preview: co.call_out_main?.rows_preview,
-      },
-      errors['callout'],
-      PREVIEW_CALLOUT
-    ),
-  ].join('');
+  document.getElementById('exceptions-grid').innerHTML =
+    `<div class="exceptions-split-row">${[
+      targetedVtoPanel(
+        results['targeted-vto'] || {},
+        errors['targeted-vto'],
+        results['auto-vto'] || {},
+        errors['auto-vto']
+      ),
+      bobbotPtoPanel(results['bobbot'] || {}, errors['bobbot'], idle, errors['idle-hourly-log']),
+    ].join('')}</div>` +
+    calloutOtSplitPanel(co, errors['callout'], results['ot-fill-rate'] || {}, errors['ot-fill-rate']);
+}
+
+async function loadDashboard() {
+  const freshness = document.getElementById('freshness-strip');
+  const inp = document.getElementById('dash-view-date');
+  const dateStr = (inp && inp.value) || todayISOChicago();
+  const todayCt = todayISOChicago();
+  const histBadge = document.getElementById('dash-historical-badge');
+
+  try {
+    if (dateStr === todayCt) {
+      if (histBadge) histBadge.hidden = true;
+      const { results, errors } = await fetchLiveDashboard();
+      freshness.innerHTML = ENDPOINTS.map(([key]) => {
+        const t = lastFetched[key];
+        return `<span class="freshness-item"><strong>${key}</strong>: ${t ? formatTime(t) : `<span style="color:var(--red)">${errors[key] || 'error'}</span>`}</span>`;
+      }).join('');
+      applyDashboardData(results, errors);
+    } else {
+      if (histBadge) histBadge.hidden = false;
+      const r = await fetch(`/api/dashboard-snapshot?date=${encodeURIComponent(dateStr)}`, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      const text = await r.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { error: text.slice(0, 120) };
+      }
+      if (!r.ok) {
+        freshness.innerHTML = `<span class="freshness-item"><span style="color:var(--red)">Snapshot: ${escapeHtml(data.error || `HTTP ${r.status}`)} · ${escapeHtml(dateStr)}</span></span>`;
+        const errMap = {};
+        for (const [key] of ENDPOINTS) errMap[key] = data.error || 'No snapshot';
+        applyDashboardData({}, errMap);
+        return;
+      }
+      const cap = data.captured_at ? formatTime(data.captured_at) : '—';
+      freshness.innerHTML = `<span class="freshness-item"><strong>Historical</strong>: ${escapeHtml(dateStr)} · captured ${escapeHtml(cap)} · read-only</span>`;
+      applyDashboardData(data.results || {}, data.errors || {});
+    }
+  } catch (e) {
+    freshness.innerHTML = `<span class="freshness-item"><span style="color:var(--red)">${escapeHtml(e.message || String(e))}</span></span>`;
+  }
+}
+
+function initDashboardDatePicker() {
+  const inp = document.getElementById('dash-view-date');
+  if (!inp) return;
+  const t = todayISOChicago();
+  inp.max = t;
+  if (!inp.value) inp.value = t;
+  inp.addEventListener('change', () => {
+    const v = inp.value;
+    if (v > todayISOChicago()) {
+      inp.value = todayISOChicago();
+    }
+    loadDashboard();
+  });
+
+  fetch('/api/dashboard-snapshot?list=1', { credentials: 'same-origin', cache: 'no-store' })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data && Array.isArray(data.dates) && data.dates.length) {
+        inp.min = data.dates[0];
+      }
+    })
+    .catch(() => {});
 }
 
 function tickClock() {
@@ -935,27 +1429,12 @@ function tickClock() {
 tickClock();
 setInterval(tickClock, 1000);
 
-function initHeatmapToggle() {
-  const cb = document.getElementById('heatmap-extended');
-  if (!cb || cb.dataset.ready === '1') return;
-  cb.dataset.ready = '1';
-  try {
-    cb.checked = localStorage.getItem('staffingHeatmapExtended') === '1';
-  } catch {
-    cb.checked = false;
-  }
-  cb.addEventListener('change', () => {
-    try {
-      localStorage.setItem('staffingHeatmapExtended', cb.checked ? '1' : '0');
-    } catch {
-      /* ignore quota / private mode */
-    }
-    loadAll();
-  });
-}
+document.getElementById('btn-refresh').addEventListener('click', () => loadDashboard());
 
-initHeatmapToggle();
-document.getElementById('btn-refresh').addEventListener('click', loadAll);
-
-loadAll();
-setInterval(loadAll, REFRESH_MS);
+initDashboardDatePicker();
+loadDashboard();
+setInterval(() => {
+  const inp = document.getElementById('dash-view-date');
+  const v = (inp && inp.value) || todayISOChicago();
+  if (v === todayISOChicago()) loadDashboard();
+}, REFRESH_MS);

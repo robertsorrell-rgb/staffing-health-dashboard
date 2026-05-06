@@ -52,4 +52,22 @@ function currentChicagoWeekSundayToSaturday() {
   return { week_start: weekStartYmd, week_end: weekEndYmd, label };
 }
 
-module.exports = { todayCTDateStr, currentCTHour, currentChicagoWeekSundayToSaturday };
+/** Wall clock hour (0–23) and minute (0–59) in America/Chicago */
+function chicagoHourMinute(d = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(d);
+  const hour = parseInt(parts.find((p) => p.type === 'hour')?.value || '0', 10);
+  const minute = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
+  return { hour, minute };
+}
+
+module.exports = {
+  todayCTDateStr,
+  currentCTHour,
+  currentChicagoWeekSundayToSaturday,
+  chicagoHourMinute,
+};

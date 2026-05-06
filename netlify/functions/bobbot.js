@@ -37,8 +37,8 @@ exports.handler = async (event) => {
       BOBBOT_TAB,
       'A1:ZZ20000',
       {
-        /** Today = wall date on request_date only (not saved_at). */
-        preferDateHeaders: ['request_date', 'Request_Date', 'Request Date', 'request date'],
+        /** OR all `request_date` columns (handles duplicates / sheet edits); if none match headers, column F (index 5). */
+        bobbotRequestDateMatch: true,
       }
     );
 
@@ -67,7 +67,8 @@ exports.handler = async (event) => {
           rows_cancelled_excluded: nCancelled,
         },
         headers,
-        rows_preview: rowsVisible.slice(0, 50),
+        /** All decision rows for request_date today except CANCELLED/CANCELED (preview cap). */
+        rows_preview: rowsVisible.slice(0, 80),
         fetched_at: new Date().toISOString(),
       },
       CACHE_SEC

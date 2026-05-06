@@ -111,9 +111,9 @@ Parser picks columns whose row-2 date equals **today CT** (`normalizeDateCell`) 
 
 Single header row with **≥3** hour columns (cols B+) and group names in column A is still supported.
 
-### `normalizeDateCell` (Sheets serial datetimes)
+### `normalizeDateCell` (Sheets serial numbers)
 
-Datetime serials must yield the calendar date in **America/Chicago** (not UTC midnight from `Math.floor(serial)`).
+**Numeric** cells (`UNFORMATTED_VALUE` + `SERIAL_NUMBER`): calendar **YYYY-MM-DD** from **`Math.floor(serial)`** whole days after `1899-12-30`, using **UTC** date components — same spreadsheet date the UI shows for date-only cells (avoids shifting serial midnight through **America/Chicago**, which was **one day early**). **String** dates (`M/D/Y`, `YYYY-MM-DD`) stay literal; values parsed via **`Date.parse`** still format with Chicago.
 
 ---
 
@@ -245,7 +245,7 @@ Datetime serials must yield the calendar date in **America/Chicago** (not UTC mi
 
 **Tab:** `Bobbot_History` (hardcoded — **`BOBBOT_*` env vars are not used** by the function.)
 
-**Dashboard:** `GET /api/bobbot` filters rows whose **`request_date`** equals **today (Central)**. Rows are padded to header width so sparse API arrays still line up with columns. **`CANCELLED` / `CANCELED`** (Decision column) are **excluded** from the count and preview. Response includes **`sheet_source_note`** and **`rows_cancelled_excluded`**.
+**Dashboard:** `GET /api/bobbot` keeps rows where **any** `request_date` column (or column **F** if no matching headers) equals **today’s calendar date in Central Time** (`todayCTDateStr`). Cell values use Sheets serial or string; **serials are not timezone-shifted** (see `normalizeDateCell`). Rows are padded to header width. **`CANCELLED` / `CANCELED`** are **excluded**; **all other decisions** appear in **`rows_preview`**. Response includes **`sheet_source_note`** and **`rows_cancelled_excluded`**.
 
 ### Header row (row 1) — verified 2026-05-05
 
@@ -253,9 +253,11 @@ Datetime serials must yield the calendar date in **America/Chicago** (not UTC mi
 |-----|--------|------------------|
 | 1 | A | request_key |
 | 2 | B | employee_key |
-| … | … | _(employee_email … saved_at)_ |
+| … | … | _(through column E)_ |
+| 6 | **F** | **`request_date`** (typical; filter uses all `request_date` cols, else F) |
+| … | … | _(remaining cols)_ |
 
-**Today column:** prefer **`request_date`**, then **`saved_at`**.
+**Today column:** **`bobbotRequestDateMatch`** — match today if **any** `request_date` header column matches; if no such headers, fall back to column **F** (index 5).
 
 ---
 
@@ -265,8 +267,8 @@ Datetime serials must yield the calendar date in **America/Chicago** (not UTC mi
 
 **Sheet URL:** `https://docs.google.com/spreadsheets/d/16O9z0bFmKO5cWHhY_KoYIkxsbGcBELdrNnUNUwsqR5Y/edit`
 
-**Main tab:** `CALLOUT_MAIN_TAB` (default `Sheet1`)  
-**Optional second tab:** `CALLOUT_ATTENDANCE_TAB` — `Attendance Notification Log`
+**Main tab:** `CALLOUT_MAIN_TAB` (default `Sheet1`) — API drops rows whose **Sales Group** cell is blank.  
+**Optional second tab:** `CALLOUT_ATTENDANCE_TAB` — `Attendance Notification Log` (same filter when a Sales Group column exists)
 
 ### Header row — Sheet1 (row 1) — verified 2026-05-05
 
@@ -297,3 +299,21 @@ Datetime serials must yield the calendar date in **America/Chicago** (not UTC mi
 | 9 | I | Status |
 | 10 | J | Manager (raw) |
 | 11 | K | Process Type |
+
+---
+
+## OT fill rates (`GET /api/ot-fill-rate`)
+
+**Workbook:** **`1N_k9DsnIws2wWq_p1_mLe7ra6PInQ9rNZGknlfPCxls`** (`OT_FILL_SPREADSHEET_ID` — overridable via env).
+
+**Sheet URL:** `https://docs.google.com/spreadsheets/d/1N_k9DsnIws2wWq_p1_mLe7ra6PInQ9rNZGknlfPCxls/edit`
+
+**Tab:** **`OVERTIME REVIEW`** (`OT_FILL_TAB`). **`OT_FILL_SHEET_GID`** (default `1000390321` from the URL `gid=`) is resolved **first**, so the visible tab title can differ slightly without breaking the range.
+
+**Header row:** **`SG`**, **`Day`**, **Open slots** (30-min slot count), **Filled**, **`% filled`**. The function scans the **top 25 rows** for this header line (row 1 may be a title, `IMPORTRANGE`, or blank). Today’s rows are filtered on **Day** = today **CT**.
+
+**Hours:** Open / Filled raw counts are divided by **`OT_FILL_SLOT_DIVISOR`** (default **`2`**) so each unit is **one hour** (two 30-minute slots). Response includes **`floor_hours_open`**, **`floor_hours_filled`**, **`floor_fill_pct`**, and **`by_group`** objects `{ hours_open, hours_filled, fill_pct }`.
+
+**Early warning:** **`fill_warnings`** lists rows whose **Day** is **after today (CT)** only (tomorrow onward — **today** is shown in **TODAY**), with fill % (**Filled ÷ Open** after **`OT_FILL_SLOT_DIVISOR`**, same math as the **TODAY** table) **strictly below** **`OT_FILL_WARNING_MAX_PCT`** (default **`75`**). In hours mode, rows must have **open OT hours > 0**. Sorted by date then group; capped by **`OT_FILL_WARNING_MAX_ROWS`** (default **`150`**); overflow count in **`fill_warnings_omitted`**.
+
+Legacy tabs without open/filled columns can still use **Fill %** only or **Filled + Offered** column pairs (see code).

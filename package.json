@@ -4,6 +4,7 @@
   "private": true,
   "description": "Staffing Health Dashboard — Consumer Sales WFM",
   "dependencies": {
+    "@netlify/blobs": "^8.2.0",
     "googleapis": "^144.0.0"
   },
   "engines": {
@@ -13,7 +14,7 @@
     "start": "npx --yes serve . -l 8888",
     "bootstrap-env": "node scripts/bootstrap-local-env.js",
     "dev": "npx --yes netlify dev",
-    "dev:functions": "npx --yes netlify functions:serve -f netlify/functions -p 8889",
+    "dev:functions": "NODE_OPTIONS=--max-old-space-size=4096 npx --yes netlify functions:serve -f netlify/functions -p 8889",
     "dev:proxy": "node scripts/dev-dashboard-proxy.js"
   }
 }

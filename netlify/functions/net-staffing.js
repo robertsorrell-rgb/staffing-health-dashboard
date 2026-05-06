@@ -20,6 +20,13 @@ const { env } = require('./lib/deploy-defaults.js');
 
 const CACHE_SEC = parseInt(env('CAPACITY_PULL_CACHE_SECONDS'), 10);
 
+/** Rows omitted from the net staffing heatmap (sheet may still contain these columns). */
+const NET_STAFFING_EXCLUDED_GROUPS = new Set(['ISC']);
+
+function filterNetStaffingMatrix(matrix) {
+  return (matrix || []).filter((row) => !NET_STAFFING_EXCLUDED_GROUPS.has(String(row.group || '').trim()));
+}
+
 function tabRange(tab, a1) {
   const t = (tab || 'Sheet1').replace(/'/g, "''");
   return `'${t}'!${a1}`;
@@ -151,13 +158,13 @@ exports.handler = async (event) => {
       try {
         const asm = await loadNetStaffingFromAssembled();
         if (asm && asm.matrix && asm.matrix.length) {
-          return ok({ ok: true, ...asm }, CACHE_SEC);
+          return ok({ ok: true, ...asm, matrix: filterNetStaffingMatrix(asm.matrix) }, CACHE_SEC);
         }
         if (mode === 'assembled') {
           return ok(
             {
               ok: false,
-              matrix: asm?.matrix || [],
+              matrix: filterNetStaffingMatrix(asm?.matrix || []),
               hours: asm?.hours || [],
               source: 'assembled',
               note: asm?.note || 'No interval data from Assembled for today CT.',
@@ -195,7 +202,7 @@ exports.handler = async (event) => {
     let matrix;
     let hours;
     if (two && two.matrix.length) {
-      matrix = two.matrix;
+      matrix = filterNetStaffingMatrix(two.matrix);
       hours = two.hours;
     } else {
       const leg = parseLegacyHourColumns(values);
@@ -212,7 +219,7 @@ exports.handler = async (event) => {
           CACHE_SEC
         );
       }
-      matrix = leg.matrix;
+      matrix = filterNetStaffingMatrix(leg.matrix);
       hours = leg.hours;
     }
 

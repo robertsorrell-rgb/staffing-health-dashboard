@@ -20,6 +20,8 @@ export function canonicalVtoSalesGroup(raw) {
 
   if (k === 'pc') return 'Prof Certs';
 
+  if (k.includes('prof cert')) return 'Prof Certs';
+
   if (k.includes('grad test prep') || (k.includes('college') && k.includes('grad'))) {
     return 'College';
   }

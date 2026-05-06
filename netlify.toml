@@ -5,6 +5,10 @@
 [functions]
   node_bundler = "esbuild"
 
+# Hourly at :20 UTC — one invocation per day aligns with America/Chicago hour 23 (~11 PM CT) for nightly capture.
+[functions."snapshot-nightly"]
+  schedule = "20 * * * *"
+
 [[redirects]]
   from = "/api/net-staffing"
   to = "/.netlify/functions/net-staffing"
@@ -38,6 +42,16 @@
 [[redirects]]
   from = "/api/callout"
   to = "/.netlify/functions/callout"
+  status = 200
+
+[[redirects]]
+  from = "/api/ot-fill-rate"
+  to = "/.netlify/functions/ot-fill-rate"
+  status = 200
+
+[[redirects]]
+  from = "/api/dashboard-snapshot"
+  to = "/.netlify/functions/dashboard-snapshot"
   status = 200
 
 [context.production.environment]
