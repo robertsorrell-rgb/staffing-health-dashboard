@@ -53,9 +53,27 @@ function activeCapQueueMap() {
   return filtered.length ? filtered : CAP_QUEUE_MAP;
 }
 
-/** yyyy-MM-dd CT wall calendar */
+/**
+ * yyyy-MM-dd in America/Chicago. Uses formatToParts (not toLocaleDateString) so Linux/Netlify ICU
+ * matches macOS — some runtimes return M/D/YYYY for en-CA, which breaks chicagoMidnightUtcMs and
+ * causes every interval to fail the "wrong CT date" check.
+ */
+function isoDateChicagoFromMs(ms) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(ms));
+  const H = {};
+  for (const p of parts) if (p.type !== 'literal') H[p.type] = p.value;
+  if (!H.year || !H.month || !H.day) return '';
+  return `${H.year}-${H.month}-${H.day}`;
+}
+
+/** yyyy-MM-dd CT wall calendar (today in Chicago) */
 function todayIsoCt(d = new Date()) {
-  return d.toLocaleDateString('en-CA', { timeZone: TZ });
+  return isoDateChicagoFromMs(d.getTime());
 }
 
 /** UTC millis at 00:00:00 America/Chicago on dateIso */
@@ -65,13 +83,13 @@ function chicagoMidnightUtcMs(dateIso) {
   let hi = Date.UTC(y, mo - 1, da + 1, 12, 0, 0);
   while (hi - lo > 60000) {
     const mid = Math.floor((lo + hi) / 2);
-    const wall = new Date(mid).toLocaleDateString('en-CA', { timeZone: TZ });
+    const wall = isoDateChicagoFromMs(mid);
     if (wall >= dateIso) hi = mid;
     else lo = mid;
   }
   let t = hi;
-  while (new Date(t).toLocaleDateString('en-CA', { timeZone: TZ }) !== dateIso) t -= 60000;
-  while (new Date(t - 60000).toLocaleDateString('en-CA', { timeZone: TZ }) === dateIso) t -= 60000;
+  while (isoDateChicagoFromMs(t) !== dateIso) t -= 60000;
+  while (isoDateChicagoFromMs(t - 60000) === dateIso) t -= 60000;
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: TZ,
     hour: 'numeric',
@@ -263,7 +281,7 @@ function addPullStats(a, b) {
 
 /** yyyy-MM-dd for instant in America/Chicago */
 function wallDateIsoChicago(sec) {
-  return new Date(sec * 1000).toLocaleDateString('en-CA', { timeZone: TZ });
+  return isoDateChicagoFromMs(sec * 1000);
 }
 
 /** Minute-of-day 0–1439 in Chicago */
@@ -422,7 +440,7 @@ async function pullForecastBuckets({
       }
       for (const it of intervals) {
         stats.apiRows += 1;
-        const startUnix = intervalStartToUnixSec(it.start_time);
+        const startUnix = intervalStartToUnixSec(it.start_time ?? it.startTime);
         if (startUnix == null) {
           stats.droppedBadStart += 1;
           continue;
