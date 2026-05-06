@@ -170,6 +170,12 @@ body {
   grid-template-columns: 1fr;
 }
 
+#panel-idle .panel-title {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+}
+
 .idle-split {
   display: flex;
   flex-direction: row;
