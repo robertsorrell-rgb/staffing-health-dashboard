@@ -148,6 +148,65 @@ function median(nums) {
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
+function headerLowerTail(header) {
+  const h = String(header || '').trim().toLowerCase();
+  const dot = h.lastIndexOf('.');
+  return dot >= 0 ? h.slice(dot + 1) : h;
+}
+
+/** Exclude obvious dimensions so anonymized Looker measures (s, s_1) can win. */
+function isExcludedSpeedInferColumn(header) {
+  const h = String(header || '').trim().toLowerCase();
+  const t = headerLowerTail(header);
+  if (/created_at|timestamp/.test(h)) return true;
+  if (/_date\b|_hour\b|hour_of_day/.test(h)) return true;
+  if (/lead_count|net_lead|\.count\b|_count\b/.test(h)) return true;
+  if (/\b_id\b/.test(h) || t.endsWith('_id')) return true;
+  return false;
+}
+
+const STL_INFER_MAX_MIN = 10080;
+
+/**
+ * When headers are opaque (e.g. Looker `s`, `s_1`), pick the column whose cells
+ * best resemble speed-to-lead minutes (numeric, plausible range, enough samples).
+ */
+function inferSpeedMinutesColumnFromRows(headers, rows) {
+  const hl = headers.length;
+  if (!hl || !rows.length) return -1;
+  const sampleN = Math.min(rows.length, 60);
+  let bestIdx = -1;
+  let bestScore = -1;
+
+  for (let i = 0; i < hl; i++) {
+    if (isExcludedSpeedInferColumn(headers[i])) continue;
+    const nums = [];
+    for (let r = 0; r < sampleN; r++) {
+      const row = rows[r];
+      if (!Array.isArray(row) || row.length <= i) continue;
+      const cell = row[i];
+      const ymd = normalizeDateCell(cell);
+      if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+      const m = parseMinutes(cell);
+      if (m != null && m >= 0.5 && m <= STL_INFER_MAX_MIN) nums.push(m);
+    }
+    const need = Math.max(2, Math.ceil(sampleN * 0.25));
+    if (nums.length < need) continue;
+    const med = median(nums);
+    if (med == null || med < 1 || med > 7200) continue;
+    const tail = headerLowerTail(headers[i]);
+    let bonus = 0;
+    if (/^s(_\d+)?$/i.test(tail)) bonus += 80;
+    if (/median|average|mean/.test(tail)) bonus += 25;
+    const score = nums.length * 10 + bonus;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
 /**
  * @returns {object} API payload body (before ok())
  */
@@ -161,7 +220,16 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
   const exploreBit =
     looker_explore_url && typeof looker_explore_url === 'string' ? { looker_explore_url } : {};
 
-  const speedCol = resolveSpeedMinutesColumnIndex(headers);
+  let speedCol = resolveSpeedMinutesColumnIndex(headers);
+  let speedColumnInferred = false;
+  if (speedCol < 0 && rows.length > 0) {
+    const inferred = inferSpeedMinutesColumnFromRows(headers, rows);
+    if (inferred >= 0) {
+      speedCol = inferred;
+      speedColumnInferred = true;
+    }
+  }
+
   const sgCol = salesGroupColumnIndex(headers);
 
   if (speedCol < 0) {
@@ -243,6 +311,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
     },
     by_sales_group: by_sales_group.slice(0, 32),
     fetched_at: new Date().toISOString(),
+    ...(speedColumnInferred ? { speed_column_inferred: true } : {}),
     ...exploreBit,
   };
 }
