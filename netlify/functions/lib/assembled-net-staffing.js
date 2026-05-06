@@ -114,6 +114,94 @@ function assembledMetaCacheKey(apiBase, apiKey, path) {
   return `${apiBase}\n${fp}\n${path}`;
 }
 
+const SCHEDULE_RESOLVE_NEG_TTL_MS = 300000;
+
+/**
+ * `GET /forecasted_vs_actuals` does not document `schedule_id`, but the platform uses the same default as
+ * other v0 endpoints: **master schedule** when omitted. The Staffing timeline often shows “Default Schedule”
+ * instead — numbers will not match until that schedule’s UUID is sent. We try a few list-style paths
+ * (undocumented; vary by account) to resolve a human name → id.
+ */
+function extractNamedSchedulesFromResponse(payload) {
+  const out = [];
+  const add = (id, name) => {
+    if (id == null || name == null) return;
+    const n = String(name).trim();
+    const i = String(id).trim();
+    if (i && n) out.push({ id: i, name: n });
+  };
+  if (!payload || typeof payload !== 'object') return out;
+  const collect = (block) => {
+    if (!block) return;
+    if (Array.isArray(block)) {
+      for (const row of block) {
+        if (row && row.id != null && row.name != null) add(row.id, row.name);
+      }
+    } else if (typeof block === 'object') {
+      for (const row of Object.values(block)) {
+        if (row && row.id != null && row.name != null) add(row.id, row.name);
+      }
+    }
+  };
+  collect(payload.schedules);
+  collect(payload.schedule_templates);
+  collect(payload.templates);
+  if (Array.isArray(payload.data)) collect(payload.data);
+  return out;
+}
+
+/**
+ * When `ASSEMBLED_SCHEDULE_AUTORESOLVE_OFF` is not set, we try to match this name (default “Default Schedule”).
+ * Set `ASSEMBLED_SCHEDULE_MATCH_NAME=` to empty in env to skip name resolution without turning off other behavior.
+ */
+function scheduleNameForAutoResolve() {
+  if (['1', 'true', 'yes'].includes(String(env('ASSEMBLED_SCHEDULE_AUTORESOLVE_OFF') || '').trim().toLowerCase())) {
+    return (env('ASSEMBLED_SCHEDULE_MATCH_NAME') || '').trim();
+  }
+  const custom = (env('ASSEMBLED_SCHEDULE_MATCH_NAME') || '').trim();
+  if (custom) return custom;
+  return 'Default Schedule';
+}
+
+async function resolveScheduleIdByName(apiBase, apiKey, matchName) {
+  if (!matchName) return { scheduleId: '', triedPath: '' };
+  const ttlMs = assembledMetaCacheTtlMs();
+  const posKey = assembledMetaCacheKey(apiBase, apiKey, `/schedule_resolve\n${matchName}`);
+  const negKey = assembledMetaCacheKey(apiBase, apiKey, `/schedule_resolve_neg\n${matchName}`);
+
+  const negHit = assembledMetaCache.get(negKey);
+  if (negHit && Date.now() < negHit.expires) {
+    return { scheduleId: '', triedPath: '' };
+  }
+  if (ttlMs > 0) {
+    const hit = assembledMetaCache.get(posKey);
+    if (hit && Date.now() < hit.expires && hit.payload && hit.payload.scheduleId) {
+      return hit.payload;
+    }
+  }
+
+  const lower = matchName.toLowerCase();
+  const paths = ['/schedules', '/schedule_templates', '/schedule_template'];
+  for (const path of paths) {
+    try {
+      const res = await assembledFetch(apiBase, apiKey, path, {});
+      const candidates = extractNamedSchedulesFromResponse(res);
+      const row = candidates.find((s) => s.name.toLowerCase().trim() === lower);
+      if (row && row.id) {
+        const payload = { scheduleId: row.id, triedPath: path };
+        if (ttlMs > 0) {
+          assembledMetaCache.set(posKey, { expires: Date.now() + ttlMs, payload });
+        }
+        return payload;
+      }
+    } catch {
+      /* try next path */
+    }
+  }
+  assembledMetaCache.set(negKey, { expires: Date.now() + SCHEDULE_RESOLVE_NEG_TTL_MS, payload: null });
+  return { scheduleId: '', triedPath: '' };
+}
+
 function assembled429MaxAttempts() {
   const n = parseInt(String(env('ASSEMBLED_RATE_LIMIT_MAX_ATTEMPTS') || '6'), 10);
   return Number.isFinite(n) && n >= 1 ? Math.min(n, 12) : 6;
@@ -570,7 +658,20 @@ async function loadNetStaffingFromAssembled() {
 
   const rollup = hourRollupMode();
   const netMode = netComputeMode();
-  const scheduleId = (env('ASSEMBLED_SCHEDULE_ID') || '').trim();
+  const explicitScheduleId = (env('ASSEMBLED_SCHEDULE_ID') || '').trim();
+  const scheduleAutoName = scheduleNameForAutoResolve();
+  let scheduleId = explicitScheduleId;
+  /** @type {'explicit'|'resolved_name'|'api_master_default'|'resolve_failed'} */
+  let scheduleSource = explicitScheduleId ? 'explicit' : 'api_master_default';
+  if (!scheduleId && scheduleAutoName) {
+    const r = await resolveScheduleIdByName(apiBase, apiKey, scheduleAutoName);
+    if (r.scheduleId) {
+      scheduleId = r.scheduleId;
+      scheduleSource = 'resolved_name';
+    } else {
+      scheduleSource = 'resolve_failed';
+    }
+  }
 
   const dateIso = todayIsoCt();
   const dayStartMs = chicagoMidnightUtcMs(dateIso);
@@ -662,11 +763,21 @@ async function loadNetStaffingFromAssembled() {
         'WARNING: Net staffing used queue + channel only (ASSEMBLED_ALLOW_NO_SITE_RETRY) — mixed all sites; compare only if timeline has no site filter.'
       );
     }
-    if (scheduleId) {
-      parts.push('schedule_id filter active — match the same schedule in Staffing timeline.');
+    if (scheduleSource === 'explicit') {
+      parts.push(
+        'ASSEMBLED_SCHEDULE_ID is set — confirm Staffing timeline uses that same schedule (not another template).'
+      );
+    } else if (scheduleSource === 'resolved_name') {
+      parts.push(
+        `schedule_id auto-resolved from Assembled name “${scheduleAutoName}” (matches typical “Default Schedule” timeline). Set ASSEMBLED_SCHEDULE_ID to pin the UUID.`
+      );
+    } else if (scheduleSource === 'resolve_failed' && scheduleAutoName) {
+      parts.push(
+        `Could not list/find schedule “${scheduleAutoName}” via API (tried /schedules, /schedule_templates). Set ASSEMBLED_SCHEDULE_ID manually. Until then Assembled uses **master schedule** by default — nets often differ from a “Default Schedule” timeline.`
+      );
     } else {
       parts.push(
-        'No ASSEMBLED_SCHEDULE_ID — if Staffing timeline uses “Default Schedule”, add that schedule’s UUID or hourly nets may not match.'
+        'No schedule_id: Assembled defaults to **master schedule**. Timeline “Default Schedule” usually needs ASSEMBLED_SCHEDULE_ID or auto-resolve (ASSEMBLED_SCHEDULE_MATCH_NAME).'
       );
     }
     const slotsPerHour = 3600 / intervalSec;
@@ -699,6 +810,7 @@ async function loadNetStaffingFromAssembled() {
     assembled_hour_rollup: rollup,
     assembled_net_compute: netMode,
     assembled_schedule_id_set: !!scheduleId,
+    assembled_schedule_source: scheduleSource,
     assembled_queues_used: queueNames,
     assembled_queues_missing: missingQueueNames.length ? missingQueueNames : undefined,
     assembled_site_filter: envSkipSite ? 'none_env' : assembledOmitSiteAuto ? 'none_auto_retry' : 'site_id',
