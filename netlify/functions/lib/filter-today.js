@@ -156,6 +156,47 @@ async function readSheetFilterToday(spreadsheetId, tab, a1Suffix = 'A1:Z10000', 
 }
 
 /**
+ * One fetch of Bobbot_History with the same **request_date** column OR-semantics as `readSheetFilterToday` (`bobbotRequestDateMatch`).
+ * Use this when you need both “today” and “this week” rows without reading the sheet twice.
+ * @returns {{ headers: string[], rows: any[][], dateColsForMatch: number[], dateHeader: string, today: string }}
+ */
+async function readBobbotHistoryBody(spreadsheetId, tab, a1Suffix = 'A1:ZZ20000') {
+  const t = (tab || 'Sheet1').replace(/'/g, "''");
+  const range = `'${t}'!${a1Suffix}`;
+  const values = await getSheetValues(spreadsheetId, range, {
+    valueRenderOption: 'UNFORMATTED_VALUE',
+    dateTimeRenderOption: 'SERIAL_NUMBER',
+  });
+  const today = todayCTDateStr();
+  if (!values.length) {
+    return { headers: [], rows: [], dateColsForMatch: [5], dateHeader: '', today };
+  }
+  const headers = (values[0] || []).map((h) => String(h || '').trim());
+  const bobbotDatePrefers = ['request_date', 'Request_Date', 'Request Date', 'request date'];
+  const multiIdx = collectRequestDateColumnIndices(headers, bobbotDatePrefers);
+  const dateColsForMatch = multiIdx.length > 0 ? multiIdx : [5];
+
+  let dateHeader = '';
+  if (multiIdx.length > 1) {
+    const labels = [...new Set(multiIdx.map((i) => String(headers[i] || '').trim()).filter(Boolean))];
+    dateHeader = labels.length ? `${labels.join(' / ')} (${multiIdx.length} cols)` : '';
+  } else if (multiIdx.length === 1) {
+    const fi = multiIdx[0];
+    const label = fi < headers.length ? String(headers[fi] || '').trim() : '';
+    dateHeader = label
+      ? `${label} (col ${columnLetterFromIndex(fi)})`
+      : `Column ${columnLetterFromIndex(fi)}`;
+  } else {
+    dateHeader = `request_date → col ${columnLetterFromIndex(5)} (fallback)`;
+  }
+
+  const hl = headers.length;
+  const rows = values.slice(1).map((row) => padRowToHeaders(row, hl));
+
+  return { headers, rows, dateColsForMatch, dateHeader, today };
+}
+
+/**
  * Same as readSheetFilterToday but rows whose date column falls in [weekStartYmd, weekEndYmd] inclusive (YYYY-MM-DD, CT calendar dates on the chosen column).
  * @param {string} weekStartYmd
  * @param {string} weekEndYmd
@@ -213,4 +254,4 @@ async function readSheetFilterWeek(spreadsheetId, tab, a1Suffix = 'A1:Z10000', o
   return { headers, rowsWeek, rowsAll: body, dateCol, today: todayCTDateStr(), weekStartYmd, weekEndYmd };
 }
 
-module.exports = { readSheetFilterToday, readSheetFilterWeek };
+module.exports = { readSheetFilterToday, readSheetFilterWeek, readBobbotHistoryBody };

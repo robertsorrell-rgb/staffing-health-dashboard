@@ -1043,6 +1043,57 @@ function htmlBobbotReachoutsColumn(bobbotData, bobbotErr, idleData, idleErr) {
   return `<div class="idle-split-col bobbot-reachouts-col"><div class="idle-split-heading">Intraday reach-outs</div><p class="panel-muted" style="font-size:11px;margin-bottom:8px;line-height:1.35;">${escapeHtml(sub)}</p>${body}</div>`;
 }
 
+/** Sun–Sat CT week: approved PTO hours by sales group (`pto_week_approved` from `/api/bobbot`). */
+function htmlPtoWeekApprovedRollup(week, errMsg, configured) {
+  if (errMsg || configured === false || !week || typeof week !== 'object') return '';
+
+  const meta =
+    week.week_start && week.week_end
+      ? `${fmtOtWarnDayCt(week.week_start)} – ${fmtOtWarnDayCt(week.week_end)} · Sun–Sat (CT)`
+      : week.label
+        ? `${week.label} · Sun–Sat (CT)`
+        : 'Sun–Sat · Central Time';
+
+  const warnMissingCol =
+    week.hours_column_found === false
+      ? `<p class="panel-muted" style="font-size:11px;margin:8px 0 0;line-height:1.35;">No hours column detected on Bobbot_History; hour totals stay at zero.</p>`
+      : '';
+
+  const rowsMatched = Number(week.rows_matched) || 0;
+  const groupsPositive = (week.by_group || []).filter((r) => Number(r.approved_hours) > 0);
+  const totalH = Number(week.total_hours) || 0;
+
+  let inner = '';
+  if (rowsMatched === 0) {
+    inner = `<p class="panel-muted" style="margin-top:6px;line-height:1.4;">No approved PTO dated this Sun–Sat week (Central).</p>`;
+  } else if (!groupsPositive.length || totalH <= 0) {
+    const miss =
+      typeof week.rows_missing_hours_value === 'number' && week.rows_missing_hours_value > 0
+        ? ` ${week.rows_missing_hours_value} row(s) missing hour values.`
+        : '';
+    inner = `<p class="panel-muted" style="margin-top:6px;line-height:1.4;">Approved decisions this week (${rowsMatched}), but no hours summed.${miss}</p>${warnMissingCol}`;
+  } else {
+    const thead =
+      '<thead><tr><th>Sales group</th><th class="num">Approved h</th></tr></thead>';
+    const tbody = groupsPositive
+      .map(
+        (r) =>
+          `<tr><td>${escapeHtml(String(r.group))}</td><td class="num">${formatHoursDisplay(r.approved_hours)}</td></tr>`
+      )
+      .join('');
+    const foot = `<tfoot><tr class="rollup-sum-row"><td>Total</td><td class="num">${formatHoursDisplay(totalH)}</td></tr></tfoot>`;
+    inner = `<div class="preview-table-wrap"><table class="preview-table rollup-table">${thead}<tbody>${tbody}</tbody>${foot}</table></div>${warnMissingCol}`;
+  }
+
+  return `
+    <section class="pto-week-rollup" aria-labelledby="pto-week-approved-head">
+      <h3 class="idle-split-heading" id="pto-week-approved-head">Approved PTO this week</h3>
+      <p class="panel-muted pto-week-meta">${escapeHtml(meta)}</p>
+      ${inner}
+    </section>
+  `;
+}
+
 /** Bobbot card: denied PTO table + idle-driven reach-out suggestions (split like Idle / VTO). */
 function bobbotPtoPanel(data, errMsg, idleData, idleErr) {
   const id = 'panel-bobbot-pto';
@@ -1080,6 +1131,7 @@ function bobbotPtoPanel(data, errMsg, idleData, idleErr) {
         </div>
         ${htmlBobbotReachoutsColumn(data, errMsg, idleData, idleErr)}
       </div>
+      ${htmlPtoWeekApprovedRollup(data.pto_week_approved, errMsg, data.configured)}
     </div>
   `;
 }
@@ -2092,18 +2144,14 @@ function applyDashboardData(results, errors) {
             adhIntradayMeta.textContent = `Reading tab: ${adh.intraday_snapshot_tab}`;
           }
         } else {
-          const maxI = 24;
-          const sl = ileaders.slice(0, maxI);
-          const extraI =
-            ileaders.length > maxI ? `<p class="panel-muted">+${ileaders.length - maxI} more not shown</p>` : '';
           adhIntraday.innerHTML =
-            `<table class="adh-intraday-table" aria-label="Total OOA minutes today by rep"><thead><tr><th scope="col">Rep</th><th scope="col">Manager</th><th scope="col" style="text-align:right">OOA min</th></tr></thead><tbody>${sl
+            `<div class="adh-intraday-table-wrap" role="region" aria-label="Total OOA minutes today — scroll for more rows"><table class="adh-intraday-table"><thead><tr><th scope="col">Rep</th><th scope="col">Manager</th><th scope="col" style="text-align:right">OOA min</th></tr></thead><tbody>${ileaders
               .map((r) => {
                 const tier = r.top_tier ? ' class="adh-intraday-top-tier"' : '';
                 const mins = r.total_ooa_mins_today;
                 return `<tr${tier}><td class="adh-intraday-agent">${escapeHtml(r.agent)}</td><td class="adh-intraday-mgr">${escapeHtml(r.manager)}</td><td class="adh-intraday-mins">${mins}</td></tr>`;
               })
-              .join('')}</tbody></table>${extraI}`;
+              .join('')}</tbody></table></div>`;
         }
       }
     }
