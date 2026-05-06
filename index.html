@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staffing Health Dashboard</title>
-  <link rel="stylesheet" href="css/styles.css?v=63" />
+  <link rel="stylesheet" href="css/styles.css?v=64" />
 </head>
 <body>
   <div class="dash-root">
@@ -48,6 +48,11 @@
       <div class="panel-grid panel-grid-fullwidth">
         <div class="panel-card" id="panel-adherence">
           <div class="panel-title">Live floor adherence</div>
+          <div class="adh-live-floor-block">
+            <div class="adh-live-floor-heading">Out of adherence agents (live floor)</div>
+            <div class="adh-live-floor-body" id="adh-live-floor-ooa"></div>
+            <p class="panel-muted adh-live-floor-meta" id="adh-live-floor-meta" hidden></p>
+          </div>
           <div class="panel-sub" id="adh-stats"></div>
           <div class="panel-sub" id="adh-managers"></div>
           <p style="margin-top:10px;"><a class="digest-link" id="adh-digest" href="#" target="_blank" rel="noopener" hidden>Daily digest →</a></p>
@@ -117,6 +122,6 @@
   </main>
   </div>
 
-  <script type="module" src="js/app.js?v=80"></script>
+  <script type="module" src="js/app.js?v=85"></script>
 </body>
 </html>

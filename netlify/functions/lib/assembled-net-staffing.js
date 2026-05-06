@@ -14,6 +14,7 @@ const {
   graphqlCollectScheduleLikeNodes,
   assembledGraphqlQuery,
 } = require('./assembled-schedule-probe.js');
+const { transportError } = require('./assembled-http-errors.js');
 
 /** GET /sites + /queues responses — stable enough to cache and heavy enough to 429 if refreshed often. */
 const assembledMetaCache = new Map();
@@ -236,12 +237,26 @@ async function assembledFetch(apiBase, apiKey, path, params) {
   let lastStatus = 0;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const res = await fetch(url, { headers });
+    let res;
+    try {
+      res = await fetch(url, { headers });
+    } catch (fetchErr) {
+      throw transportError(url, `${path}`, fetchErr);
+    }
     lastStatus = res.status;
     lastText = await res.text();
 
     if (res.ok) {
-      const parsed = lastText ? JSON.parse(lastText) : {};
+      let parsed;
+      try {
+        parsed = lastText ? JSON.parse(lastText) : {};
+      } catch (parseErr) {
+        const err = new Error(`Assembled ${path} returned invalid JSON`);
+        err.statusCode = 502;
+        err.hint =
+          'Response was not JSON — confirm ASSEMBLED_API_BASE points to Assembled API v0 and the path is correct.';
+        throw err;
+      }
       if (ttlMs > 0 && (path === '/sites' || path === '/queues')) {
         const ck = assembledMetaCacheKey(apiBase, apiKey, path);
         assembledMetaCache.set(ck, { expires: Date.now() + ttlMs, payload: parsed });
@@ -262,6 +277,10 @@ async function assembledFetch(apiBase, apiKey, path, params) {
     const err = new Error(`Assembled ${path} ${res.status}: ${lastText.slice(0, 400)}`);
     err.statusCode =
       res.status === 401 || res.status === 403 ? 503 : res.status === 429 ? 503 : 502;
+    if (res.status === 401 || res.status === 403) {
+      err.hint =
+        'Unauthorized — verify ASSEMBLED_API_KEY (Basic auth: key with empty password / trailing colon).';
+    }
     throw err;
   }
 

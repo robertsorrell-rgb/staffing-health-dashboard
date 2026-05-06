@@ -11,9 +11,13 @@ Visual tokens align with the VCPU Dashboard (IBM Plex, navy / coral palette).
 | **Layout & visuals** | Done — header, net-staffing heatmap card (with source line), idle KPI + sparkline, adherence, exception panels. |
 | **Frontend logic** | Done — polls all `/api/*` routes, renders errors inline. |
 | **Backend functions** | Done — Sheets + optional Assembled for staffing; smoke scripts verify handlers. |
-| **What you need to see live data** | Run **`npm run dev`** (`netlify dev`) so `/api/*` is routed to functions, **or** deploy to Netlify with env vars. Plain **`npm start`** only serves static files — APIs will fail and panels show errors (layout still visible). |
+| **What you need to see live data** | **`npm start`** starts **`netlify functions:serve`** on **8889** and the static proxy on **8888**, routing **`/api/*`** to **your local** `netlify/functions` (`.env` is still used for Sheets keys). No GitHub/Netlify deploy needed to validate changes. Use **`npm run start:remote`** for proxy-only: static on **8888** + **`/api/*`** → **`DASHBOARD_API_ORIGIN`** / **`local-dashboard-dev.json`** (production JSON without running functions). **`npm run start:static`** is layout-only (no APIs). **`npm run dev`** is full **`netlify dev`**. |
 
-So you are **one working Netlify-style dev/prod URL** away from the full visual: the UI is essentially complete; the gap is almost always **running with functions + credentials**, not missing charts.
+So you are **one working Netlify-style dev/prod URL** away from the full visual: the UI is essentially complete; the gap is almost always **routing `/api/*` to functions** (local or production), not missing charts.
+
+**Preview against production APIs without local functions:** Set **`DASHBOARD_API_ORIGIN`** in `.env` (or **`local-dashboard-dev.json`**) and run **`npm run start:remote`** — local HTML/JS, Netlify-backed **`/api/*`**.
+
+**Plain static server (Python, Live Server, etc.):** `/api/*` is not available unless you also set **`dashboardApiOrigin`** in **`local-dashboard-dev.json`** so the browser calls Netlify directly over CORS.
 
 ## Prerequisites
 
@@ -26,7 +30,7 @@ So you are **one working Netlify-style dev/prod URL** away from the full visual:
 
 3. Batch-share these workbooks: IDLE CONSUMER, Automated VTO bot workbook (Capacity Pull + Requests tabs), Targeted VTO, Bobbot, Live Floor Adherence, Call Out Main Flow (+ attendance tab).
 
-   Set **`ASSEMBLED_API_KEY`** (same Script Property as Capacity Pull refresh) so `/api/net-staffing` uses Assembled net staffing (there is **no** Capacity Pull sheet fallback when this key is set). Optional **`CAPACITY_PULL_SOURCE=sheet`** reads tab **`Capacity Pull`** (% deviation) instead of calling Assembled.
+   Set **`ASSEMBLED_API_KEY`** (same Script Property as Capacity Pull refresh) so `/api/net-staffing` prefers Assembled (people). If Assembled is **unreachable** (DNS/timeout, etc.) and **`CAPACITY_PULL_SPREADSHEET_ID`** is set, the function **falls back** to tab **`Capacity Pull`** (% deviation) by default — disable with **`CAPACITY_PULL_FALLBACK_ON_ASSEMBLED_TRANSPORT=0`**. Optional **`CAPACITY_PULL_SOURCE=sheet`** skips Assembled entirely.
 
    [.env.example](.env.example) lists IDs and tabs. Share each workbook with the reader SA (**Viewer**).
 

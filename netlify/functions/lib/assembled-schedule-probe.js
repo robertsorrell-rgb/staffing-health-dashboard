@@ -5,6 +5,8 @@
  * assembled-net-staffing.js and scripts/assembled-list-schedules.js — keep paths/queries in sync.
  */
 
+const { transportError } = require('./assembled-http-errors.js');
+
 const SCHEDULE_REST_PATHS = [
   '/schedules',
   '/schedule_templates',
@@ -96,15 +98,20 @@ async function assembledGraphqlQuery(apiBase, apiKey, query) {
   const auth = Buffer.from(`${apiKey}:`, 'utf8').toString('base64');
   const apiVer = String(process.env.ASSEMBLED_API_VERSION || '').trim();
   const url = `${apiBase.replace(/\/$/, '')}/graphql`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${auth}`,
-      'Content-Type': 'application/json',
-      ...(apiVer ? { 'API-Version': apiVer } : {}),
-    },
-    body: JSON.stringify({ query }),
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        'Content-Type': 'application/json',
+        ...(apiVer ? { 'API-Version': apiVer } : {}),
+      },
+      body: JSON.stringify({ query }),
+    });
+  } catch (fetchErr) {
+    throw transportError(url, 'POST /graphql', fetchErr);
+  }
   const text = await res.text();
   if (!res.ok) {
     const err = new Error(`Assembled /graphql ${res.status}: ${text.slice(0, 240)}`);

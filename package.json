@@ -10,12 +10,16 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "start": "npx --yes serve . -l 8888",
+    "stop:dev": "node scripts/stop-dashboard-dev-servers.js",
+    "start": "node scripts/dev-local-all.js",
+    "start:8890": "DEV_FUNCTIONS_PORT=8890 node scripts/dev-local-all.js",
+    "start:remote": "node scripts/dev-dashboard-proxy.js",
+    "start:static": "npx --yes serve . -l 8888",
     "bootstrap-env": "node scripts/bootstrap-local-env.js",
     "assembled:list-schedules": "node scripts/assembled-list-schedules.js",
     "assembled:inspect-forecast": "node scripts/assembled-inspect-forecast.js",
     "dev": "npx --yes netlify dev",
-    "dev:functions": "NODE_OPTIONS=--max-old-space-size=8192 npx --yes netlify functions:serve -f netlify/functions -p 8889",
+    "dev:functions": "NODE_OPTIONS=--max-old-space-size=8192 npx --yes netlify functions:serve --offline -f netlify/functions -p 8889",
     "dev:proxy": "node scripts/dev-dashboard-proxy.js"
   }
 }

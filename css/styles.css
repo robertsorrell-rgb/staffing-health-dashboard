@@ -647,6 +647,54 @@ a.digest-link {
   font-size: 13px;
 }
 
+/** Live floor OOA list (under adherence title). */
+.adh-live-floor-block {
+  margin-top: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--cream-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.adh-live-floor-heading {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text-sec);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 8px;
+}
+.adh-live-floor-body ul.adh-ooa-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.adh-ooa-list li {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.adh-ooa-list li:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.adh-ooa-name {
+  font-weight: 700;
+  color: var(--navy);
+}
+.adh-ooa-state {
+  color: var(--text-sec);
+}
+.adh-ooa-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--red, #b00020);
+}
+.adh-live-floor-meta {
+  margin: 8px 0 0;
+}
+
 .freshness-strip {
   background: #fff;
   border: 1px solid var(--border);

@@ -18,6 +18,10 @@ const DEFAULTS = {
   IDLE_HOURLY_LOG_CACHE_SECONDS: '180',
   ADHERENCE_SPREADSHEET_ID: '16OLaJrpyNHzh9Oqd5GV3JdSx0YJeyu8a4qD38WTpcgU',
   ADHERENCE_ALERTS_TAB: 'Adherence_Alert_Log',
+  /** Live Floor tab — current OOA rows for dashboard list (Name, Flex State, Adherence). */
+  ADHERENCE_LIVE_FLOOR_TAB: 'Live Floor',
+  /** Sheet `gid=` from the Live Floor tab URL (pins tab even if titles collide). */
+  ADHERENCE_LIVE_FLOOR_SHEET_GID: '1939628111',
   ADHERENCE_CACHE_SECONDS: '120',
   TARGETED_VTO_SPREADSHEET_ID: '1znBYs9PemirPw_is3b8Blj74wEz7Hb6iGH88DH2qWmU',
   TARGETED_VTO_TAB: 'Offers',

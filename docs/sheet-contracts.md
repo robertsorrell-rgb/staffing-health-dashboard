@@ -39,7 +39,7 @@ Parsers MUST match these headers. When a bot owner changes row 1, update this do
 
 | Column | Meaning | Type notes |
 |--------|---------|------------|
-| Hour Key | Composite `YYYY-MM-DD HH` (CT hour bucket) | String; trailing token is CT hour-start 0–23 |
+| Hour Key | Composite `YYYY-MM-DD HH` (CT interval start) | String; trailing token is **start** hour 0–23 for that row’s slot (same as Hour Label start); API rolls up by **end** hour |
 | Date | Calendar date | ISO `YYYY-MM-DD` or Sheets serial via API |
 | Hour Label | Display slot, e.g. `6 AM–7 AM` | Use for hour parsing first |
 | Agent Name | Consultant | Filter not applied in v1 rollup |
@@ -53,7 +53,7 @@ Parsers MUST match these headers. When a bot owner changes row 1, update this do
 ### Parser behavior (`idle-hourly-log.js`)
 
 - Detects **Date**, **Hour Label** / **Hour Key** / generic **Hour**, **Sales Group** (optional), **Available Mins**, **On Call Mins**.
-- **Hour:** prefers **Hour Label** (`parseHourHeader`); else **Hour Key** suffix `\\s(\\d{1,2})$`; else numeric hour column.
+- **Hour:** prefers **Hour Label** (interval end from ranges like `10 AM–11 AM` → bucket **11**); else **Hour Key** trailing start hour → bucket **start + 1** (mod 24); else numeric hour column treated as interval start → same **+1**. Matches “hourly trigger logs the previous full hour”: the logged row aligns with **Chicago wall clock when that interval completes**.
 - Filters rows to **today** in **America/Chicago** using the **Date** column.
 - Floor idle = **Σ Available Mins ÷ Σ (Available Mins + On Call Mins)** across all rows in scope (weighted, not avg of Idle %).
 
@@ -151,6 +151,29 @@ Single header row with **≥3** hour columns (cols B+) and group names in column
 ### Daily digest
 
 `ADHERENCE_DIGEST_URL` — canonical URL for Kevin (Slack, Doc, wiki).
+
+---
+
+## Live Floor Adherence — Live Floor tab (real-time OOA list)
+
+**Same workbook** as alerts (`ADHERENCE_SPREADSHEET_ID`).  
+**Tab:** `ADHERENCE_LIVE_FLOOR_TAB` (default **`Live Floor`**). **`ADHERENCE_LIVE_FLOOR_SHEET_GID`** defaults to the Live Floor tab id from the workbook URL (`gid=1939628111`); override if Google retitles the tab. Optional range override: `ADHERENCE_LIVE_FLOOR_RANGE`.
+
+The parser **detects the header row** (looks for Name + Adherence, etc.) so title rows above the table do not break column mapping. It merges **formatted + unformatted** cell reads so emoji / display text like **Significant OOA (33m)** still parses when one render mode is empty.
+
+### Header row — typical columns
+
+| Col | Letter | Header | Dashboard use |
+|-----|--------|--------|----------------|
+| 1 | A | Name | Agent name |
+| 3 | C | Flex State | Shown as **State** |
+| 7 | G | Adherence | OOA vs in-adherence (see below) |
+
+Headers are matched flexibly (`name`, `flex state` / `state`, `adherence`). Fallback column indexes **A / C / G** apply if a header is missing.
+
+### OOA detection (`adherence.js`)
+
+Rows are listed when the Adherence cell indicates **out of adherence**, e.g. text containing **`OOA`**, **`Significant OOA`**, or **`out of adherence`**. Rows whose text reads **`In Adherence`** (without OOA wording) are excluded. Display text comes from the sheet (**`FORMATTED_VALUE`**) so it matches the bot formatting users see.
 
 ---
 

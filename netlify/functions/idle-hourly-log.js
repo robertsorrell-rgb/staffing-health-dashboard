@@ -15,7 +15,10 @@ const {
   handleOptions,
 } = require('./_sheets.js');
 const { todayCTDateStr, currentCTHour } = require('./lib/ct.js');
-const { parseHourHeader } = require('./lib/hour-headers.js');
+const {
+  idleLogClosedHourBucketFromHourKey,
+  idleLogClosedHourBucketFromLabel,
+} = require('./lib/hour-headers.js');
 const { env } = require('./lib/deploy-defaults.js');
 
 const CACHE_SEC = parseInt(env('IDLE_HOURLY_LOG_CACHE_SECONDS'), 10);
@@ -54,22 +57,21 @@ function hasHourColumn(idx) {
   return idx.hour_label != null || idx.hour_key != null || idx.hour != null;
 }
 
+/** Rollup hour = interval end in CT (see `idleLogClosedHourBucketFromLabel`). */
 function resolveHourFromRow(row, idx) {
   if (idx.hour_label != null) {
-    const hr = parseHourHeader(row[idx.hour_label]);
-    if (hr != null) return hr;
+    const b = idleLogClosedHourBucketFromLabel(row[idx.hour_label]);
+    if (b != null) return b;
   }
   if (idx.hour_key != null) {
     const hk = String(row[idx.hour_key] || '').trim();
-    const m = hk.match(/\s(\d{1,2})$/);
-    if (m) {
-      const h = parseInt(m[1], 10);
-      if (h >= 0 && h <= 23) return h;
-    }
-    const hr2 = parseHourHeader(hk);
-    if (hr2 != null) return hr2;
+    const b = idleLogClosedHourBucketFromHourKey(hk);
+    if (b != null) return b;
   }
-  if (idx.hour != null) return parseHourCell(row[idx.hour]);
+  if (idx.hour != null) {
+    const start = parseHourCell(row[idx.hour]);
+    if (start != null) return (start + 1) % 24;
+  }
   return null;
 }
 

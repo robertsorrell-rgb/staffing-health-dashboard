@@ -40,6 +40,7 @@ async function run(name, modPath) {
   if (body.summary?.rows_today != null) process.stdout.write(` rows_today=${body.summary.rows_today}`);
   if (body.rows_today != null) process.stdout.write(` rows_today=${body.rows_today}`);
   if (body.ping1_today != null) process.stdout.write(` ping1=${body.ping1_today}`);
+  if (Array.isArray(body.live_floor_ooa)) process.stdout.write(` live_floor_ooa=${body.live_floor_ooa.length}`);
   if (body.matrix?.length != null) process.stdout.write(` matrix_groups=${body.matrix.length}`);
   if (body.source) process.stdout.write(` source=${body.source}`);
   if (!ok200 || body.error) process.stdout.write(` error=${body.error || ''}`);

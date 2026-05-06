@@ -1,8 +1,10 @@
 'use strict';
 
 /**
- * Net staffing heatmap: Assembled API when ASSEMBLED_API_KEY is set (no Capacity Pull fallback).
- * Sheet layout only when CAPACITY_PULL_SOURCE=sheet or no API key / NET_STAFFING_DISABLE_ASSEMBLED.
+ * Net staffing heatmap: Assembled when ASSEMBLED_API_KEY is set and CAPACITY_PULL_SOURCE≠sheet.
+ * On Assembled **transport** failure (DNS, timeout, etc.), falls back to Capacity Pull sheet when
+ * configured — unless CAPACITY_PULL_FALLBACK_ON_ASSEMBLED_TRANSPORT=0.
+ * Sheet-only: CAPACITY_PULL_SOURCE=sheet or no API key / NET_STAFFING_DISABLE_ASSEMBLED.
  */
 
 const {
@@ -17,6 +19,7 @@ const {
 const { parseHourHeader } = require('./lib/hour-headers.js');
 const { todayCTDateStr } = require('./lib/ct.js');
 const { loadNetStaffingFromAssembled } = require('./lib/assembled-net-staffing.js');
+const { isAssembledTransportFailure } = require('./lib/assembled-http-errors.js');
 const { env } = require('./lib/deploy-defaults.js');
 
 const CACHE_SEC = parseInt(env('CAPACITY_PULL_CACHE_SECONDS'), 10);
@@ -149,7 +152,7 @@ exports.handler = async (event) => {
   const tab = env('CAPACITY_PULL_TAB') || 'Capacity Pull';
 
   /**
-   * assembled | auto — use Assembled only (same behavior); never fall back to Capacity Pull on failure.
+   * assembled | auto — Assembled first; optional sheet fallback on transport failure.
    * sheet — Capacity Pull % only (skips Assembled even if ASSEMBLED_API_KEY is set).
    */
   const mode = rawMode || (apiKey ? 'auto' : 'sheet');
@@ -158,8 +161,13 @@ exports.handler = async (event) => {
   );
   const sheetOnly = mode === 'sheet';
   const tryAssembled = !!apiKey && !disableAssembled && !sheetOnly;
+  const allowTransportSheetFallback = !['0', 'false', 'no'].includes(
+    String(env('CAPACITY_PULL_FALLBACK_ON_ASSEMBLED_TRANSPORT') ?? '1').trim().toLowerCase()
+  );
 
   try {
+    let assembledTransportFallback = false;
+
     if (tryAssembled) {
       try {
         const asm = await loadNetStaffingFromAssembled();
@@ -185,7 +193,15 @@ exports.handler = async (event) => {
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn('[net-staffing] Assembled failed:', e.message);
-        return errorResponse(e, 'net-staffing-assembled');
+        if (allowTransportSheetFallback && spreadsheetId && isAssembledTransportFailure(e)) {
+          assembledTransportFallback = true;
+          // eslint-disable-next-line no-console
+          console.warn(
+            '[net-staffing] Assembled transport error — falling back to Capacity Pull sheet (CAPACITY_PULL_FALLBACK_ON_ASSEMBLED_TRANSPORT).'
+          );
+        } else {
+          return errorResponse(e, 'net-staffing-assembled');
+        }
       }
     }
 
@@ -237,13 +253,15 @@ exports.handler = async (event) => {
         hours,
         source: 'sheet',
         net_staffing_unit: 'percent',
-        assembled_skipped_reason: !apiKey
-          ? 'Capacity Pull (% deviation). Add ASSEMBLED_API_KEY for Assembled net staffing (people).'
-          : disableAssembled
-            ? 'Capacity Pull (% deviation). NET_STAFFING_DISABLE_ASSEMBLED is set — remove it to use Assembled.'
-            : sheetOnly && apiKey
-              ? 'Capacity Pull (% deviation). CAPACITY_PULL_SOURCE=sheet — Assembled is skipped.'
-              : undefined,
+        assembled_skipped_reason: assembledTransportFallback
+          ? 'Capacity Pull (% deviation). Assembled was unreachable (network/DNS); showing sheet until connectivity is fixed. Set CAPACITY_PULL_FALLBACK_ON_ASSEMBLED_TRANSPORT=0 to disable this fallback.'
+          : !apiKey
+            ? 'Capacity Pull (% deviation). Add ASSEMBLED_API_KEY for Assembled net staffing (people).'
+            : disableAssembled
+              ? 'Capacity Pull (% deviation). NET_STAFFING_DISABLE_ASSEMBLED is set — remove it to use Assembled.'
+              : sheetOnly && apiKey
+                ? 'Capacity Pull (% deviation). CAPACITY_PULL_SOURCE=sheet — Assembled is skipped.'
+                : undefined,
         fetched_at: new Date().toISOString(),
       },
       CACHE_SEC

@@ -51,6 +51,57 @@ const ENDPOINTS = [
   ['ot-fill-rate', '/api/ot-fill-rate'],
 ];
 
+/**
+ * On loopback, if `/api/*` is already served (npm start → proxy + local functions), keep requests
+ * same-origin. Otherwise optional `local-dashboard-dev.json` / `window.__DASHBOARD_API_ORIGIN__` can
+ * point calls at Netlify for plain static servers (Python, Live Server).
+ */
+let localRemoteApiOrigin = '';
+
+function isLoopbackHostname(hostname) {
+  const h = String(hostname || '');
+  return h === '127.0.0.1' || h === 'localhost' || h === '[::1]';
+}
+
+async function resolveLocalRemoteApiOrigin() {
+  localRemoteApiOrigin = '';
+  try {
+    if (!isLoopbackHostname(location.hostname)) return;
+    const win = typeof window !== 'undefined' ? window : null;
+    if (win && typeof win.__DASHBOARD_API_ORIGIN__ === 'string' && win.__DASHBOARD_API_ORIGIN__.trim()) {
+      localRemoteApiOrigin = win.__DASHBOARD_API_ORIGIN__.trim().replace(/\/$/, '');
+      return;
+    }
+
+    try {
+      const pr = await fetch('/api/adherence', { cache: 'no-store', credentials: 'same-origin' });
+      const text = await pr.text();
+      if (pr.ok) {
+        const j = JSON.parse(text);
+        if (j && typeof j === 'object' && Object.prototype.hasOwnProperty.call(j, 'configured')) {
+          return;
+        }
+      }
+    } catch (_) {
+      /* not JSON / not reachable — fall through to optional Netlify origin */
+    }
+
+    const r = await fetch('/local-dashboard-dev.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const o = j.dashboardApiOrigin || j.DASHBOARD_API_ORIGIN;
+    if (o && String(o).trim()) localRemoteApiOrigin = String(o).trim().replace(/\/$/, '');
+  } catch (_) {
+    /* optional file or blocked fetch */
+  }
+}
+
+function apiUrl(path) {
+  const p = String(path || '');
+  if (!localRemoteApiOrigin || !p.startsWith('/')) return p;
+  return `${localRemoteApiOrigin}${p}`;
+}
+
 /** Prefer human-readable columns; skip internal-id headers where possible. */
 const PREVIEW_AUTO_VTO = {
   preferred: ['date requested', 'timestamp', 'rep', 'agent', 'name', 'decision', 'hours', 'queue', 'manager'],
@@ -245,9 +296,17 @@ async function fetchJson(url) {
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(`Bad JSON from ${url}: ${text.slice(0, 120)}`);
+    const hint =
+      /<\s*!DOCTYPE/i.test(text) && isLoopbackHostname(location.hostname) && !localRemoteApiOrigin
+        ? ' Copy local-dashboard-dev.example.json → local-dashboard-dev.json with dashboardApiOrigin, or run npm start.'
+        : '';
+    throw new Error(`Bad JSON from ${url}: ${text.slice(0, 120)}${hint}`);
   }
-  if (!r.ok) throw new Error(data.error || r.statusText);
+  if (!r.ok) {
+    const msg = data.error || r.statusText || `HTTP ${r.status}`;
+    const hint = typeof data.hint === 'string' && data.hint.trim() ? data.hint.trim() : '';
+    throw new Error(hint ? `${msg} — ${hint}` : msg);
+  }
   return data;
 }
 
@@ -630,6 +689,12 @@ function renderSparkline(container, spark) {
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function liveFloorOoaTimeLabel(r) {
+  if (r && r.ooa_display) return String(r.ooa_display);
+  if (r && r.ooa_minutes != null) return `${r.ooa_minutes}m OOA`;
+  return '—';
 }
 
 /** Safe double-quoted attribute value for titles / tooltips. */
@@ -1396,12 +1461,24 @@ function generateLocalDailyBrief(context, meta) {
     const pingTxt =
       p1 != null || p2 != null ? ` Ping counts today: first ${p1 ?? '—'}, second ${p2 ?? '—'}.` : '';
     const tm = ad.topManagers || [];
+    const ooaN = ad.liveFloorOoaCount ?? (ad.liveFloorOoaAgents || []).length;
+    const ooaAgents = ad.liveFloorOoaAgents || [];
+    let ooaTxt = '';
+    if (ooaN > 0) {
+      const sample = ooaAgents
+        .slice(0, 5)
+        .map((a) => a.name)
+        .filter(Boolean);
+      ooaTxt = ` Live floor snapshot: ${ooaN} agent(s) out of adherence${sample.length ? ` (${sample.join(', ')}${ooaN > sample.length ? ', …' : ''})` : ''}.`;
+    }
     if (tm.length) {
       summaryParts.push(
-        `Adherence alerts lean toward: ${tm.map((m) => `${m.name} (${m.count})`).join(', ')}.${pingTxt}`
+        `Adherence alerts lean toward: ${tm.map((m) => `${m.name} (${m.count})`).join(', ')}.${pingTxt}${ooaTxt}`
       );
-    } else if (pingTxt) {
-      summaryParts.push(`Adherence:${pingTxt}`);
+    } else if (pingTxt || ooaTxt) {
+      summaryParts.push(`Adherence:${pingTxt}${ooaTxt}`);
+    } else if (ooaTxt) {
+      summaryParts.push(`Adherence.${ooaTxt.trim()}`);
     }
   }
 
@@ -1551,6 +1628,20 @@ function generateLocalDailyBrief(context, meta) {
   if (tm0) {
     actions.push(`Adherence: coach ${tm0.name} (${tm0.count} alerts) and verify floor expectations.`);
   }
+  const ooaActs = ad && ad.liveFloorOoaAgents;
+  if (ooaActs && ooaActs.length) {
+    const names = ooaActs
+      .slice(0, 4)
+      .map((a) => a.name)
+      .filter(Boolean)
+      .join(', ');
+    const n = ad.liveFloorOoaCount ?? ooaActs.length;
+    if (names) {
+      actions.push(
+        `Live floor OOA: check ${names}${n > 4 ? '…' : ''} (${n} agent${n === 1 ? '' : 's'}) — flex state vs schedule.`
+      );
+    }
+  }
   if (id && !id.error && !id.note && id.dayFloorIdlePct != null && id.dayFloorIdlePct >= 32) {
     actions.push('Idle: offer VTO or offline work where policy allows, without risking SLAs.');
   }
@@ -1652,11 +1743,18 @@ function buildDashboardBriefContext(results, errors) {
   const adh = results['adherence'];
   if (errors['adherence']) ctx.adherence = { error: errors['adherence'] };
   else if (adh) {
+    const liveFloorOoa = Array.isArray(adh.live_floor_ooa) ? adh.live_floor_ooa : [];
     ctx.adherence = {
       configured: adh.configured !== false,
       ping1Today: adh.ping1_today ?? null,
       ping2Today: adh.ping2_today ?? null,
       topManagers: (adh.top_managers || []).slice(0, 8),
+      liveFloorOoaAgents: liveFloorOoa.slice(0, 16).map((r) => ({
+        name: r.name,
+        state: r.state,
+        ooaMinutes: r.ooa_minutes ?? null,
+      })),
+      liveFloorOoaCount: liveFloorOoa.length,
     };
   }
 
@@ -1810,7 +1908,7 @@ async function fetchLiveDashboard() {
   for (let i = 0; i < ENDPOINTS.length; i++) {
     const [key, url] = ENDPOINTS[i];
     try {
-      results[key] = await fetchJson(url);
+      results[key] = await fetchJson(apiUrl(url));
       lastFetched[key] = results[key].fetched_at || new Date().toISOString();
     } catch (e) {
       errors[key] = e.message || String(e);
@@ -1891,6 +1989,8 @@ function applyDashboardData(results, errors) {
 
   const adh = results['adherence'];
   const adhErr = document.getElementById('adh-err');
+  const adhLiveFloor = document.getElementById('adh-live-floor-ooa');
+  const adhLiveFloorMeta = document.getElementById('adh-live-floor-meta');
   if (errors['adherence']) {
     adhErr.hidden = false;
     adhErr.textContent = errors['adherence'];
@@ -1898,6 +1998,14 @@ function applyDashboardData(results, errors) {
     if (adhStats) {
       adhStats.textContent = '';
       adhStats.hidden = true;
+    }
+    if (adhLiveFloor) {
+      adhLiveFloor.innerHTML =
+        '<p class="panel-muted">Live floor list unavailable until adherence loads.</p>';
+    }
+    if (adhLiveFloorMeta) {
+      adhLiveFloorMeta.hidden = true;
+      adhLiveFloorMeta.textContent = '';
     }
   } else {
     adhErr.hidden = true;
@@ -1909,6 +2017,43 @@ function applyDashboardData(results, errors) {
       } else {
         adhStats.hidden = false;
         adhStats.textContent = adh?.note || 'Adherence source not configured';
+      }
+    }
+    if (adhLiveFloor && adhLiveFloorMeta) {
+      adhLiveFloorMeta.hidden = true;
+      adhLiveFloorMeta.textContent = '';
+      if (!adh || adh.configured === false) {
+        adhLiveFloor.innerHTML = `<p class="panel-muted">${escapeHtml(adh?.note || 'Adherence not configured.')}</p>`;
+      } else {
+        if (adh.live_floor_note) {
+          adhLiveFloorMeta.hidden = false;
+          adhLiveFloorMeta.textContent = adh.live_floor_note;
+        }
+        const hasLiveFloorApi =
+          adh && typeof adh === 'object' && Object.prototype.hasOwnProperty.call(adh, 'live_floor_ooa');
+        const rows = Array.isArray(adh.live_floor_ooa) ? adh.live_floor_ooa : [];
+        if (!hasLiveFloorApi) {
+          adhLiveFloor.innerHTML =
+            '<p class="panel-muted">Live Floor OOA is not returned by the deployed API yet. Push the latest commit to GitHub, wait for Netlify to finish building, then hard-refresh. Manager alert counts above still come from the alerts log.</p>';
+        } else if (!rows.length) {
+          adhLiveFloor.innerHTML =
+            '<p class="panel-muted">No agents out of adherence on the current live floor snapshot.</p>';
+          if (!adh.live_floor_note && adh.live_floor_sheet_tab) {
+            adhLiveFloorMeta.hidden = false;
+            adhLiveFloorMeta.textContent = `Reading Live Floor tab: ${adh.live_floor_sheet_tab}`;
+          }
+        } else {
+          const max = 60;
+          const slice = rows.slice(0, max);
+          const extra = rows.length > max ? `<p class="panel-muted">+${rows.length - max} more not shown</p>` : '';
+          adhLiveFloor.innerHTML =
+            `<ul class="adh-ooa-list">${slice
+              .map(
+                (r) =>
+                  `<li><span class="adh-ooa-name">${escapeHtml(r.name)}</span> · <span class="adh-ooa-state">${escapeHtml(r.state || '—')}</span> · <span class="adh-ooa-time">${escapeHtml(liveFloorOoaTimeLabel(r))}</span></li>`,
+              )
+              .join('')}</ul>${extra}`;
+        }
       }
     }
     const tm = adh?.top_managers || [];
@@ -1961,7 +2106,7 @@ async function loadDashboard() {
       updateAiBriefPanel(lastDashboardForBrief);
     } else {
       if (histBadge) histBadge.hidden = false;
-      const r = await fetch(`/api/dashboard-snapshot?date=${encodeURIComponent(dateStr)}`, {
+      const r = await fetch(apiUrl(`/api/dashboard-snapshot?date=${encodeURIComponent(dateStr)}`), {
         credentials: 'same-origin',
         cache: 'no-store',
       });
@@ -2010,7 +2155,7 @@ function initDashboardDatePicker() {
     loadDashboard();
   });
 
-  fetch('/api/dashboard-snapshot?list=1', { credentials: 'same-origin', cache: 'no-store' })
+  fetch(apiUrl('/api/dashboard-snapshot?list=1'), { credentials: 'same-origin', cache: 'no-store' })
     .then((r) => r.json())
     .then((data) => {
       if (data && Array.isArray(data.dates) && data.dates.length) {
@@ -2040,8 +2185,14 @@ document.getElementById('btn-ai-brief-refresh')?.addEventListener('click', () =>
   if (lastDashboardForBrief) void updateAiBriefPanel(lastDashboardForBrief);
 });
 
-initDashboardDatePicker();
-loadDashboard();
+async function bootDashboard() {
+  await resolveLocalRemoteApiOrigin();
+  initDashboardDatePicker();
+  await loadDashboard();
+}
+
+void bootDashboard();
+
 setInterval(() => {
   const inp = document.getElementById('dash-view-date');
   const v = (inp && inp.value) || todayISOChicago();

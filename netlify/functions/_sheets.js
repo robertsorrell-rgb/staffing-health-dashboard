@@ -129,7 +129,7 @@ async function resolveSpreadsheetTabTitle(spreadsheetId, opts = {}) {
   if (gidStr) {
     const gn = parseInt(gidStr, 10);
     if (Number.isFinite(gn)) {
-      const byGid = list.find((x) => x.sheetId === gn);
+      const byGid = list.find((x) => Number(x.sheetId) === gn);
       if (byGid) return byGid.title;
     }
   }
@@ -241,9 +241,14 @@ function bad(message, statusCode = 400) {
 function errorResponse(err, label) {
   const status = err && err.statusCode ? err.statusCode : 500;
   const message = err && err.message ? err.message : 'Unknown error';
+  const hint = err && err.hint ? String(err.hint) : '';
+  const code = err && err.detailCode ? String(err.detailCode) : '';
   // eslint-disable-next-line no-console
-  console.error(`[${label || 'function'}] ${status} — ${message}`);
-  return { statusCode: status, headers: JSON_HEADERS_BASE, body: JSON.stringify({ error: message }) };
+  console.error(`[${label || 'function'}] ${status} — ${message}${hint ? ` — ${hint}` : ''}`);
+  const body = /** @type {{ error: string, hint?: string, code?: string }} */ ({ error: message });
+  if (hint) body.hint = hint;
+  if (code) body.code = code;
+  return { statusCode: status, headers: JSON_HEADERS_BASE, body: JSON.stringify(body) };
 }
 
 function handleOptions(event) {

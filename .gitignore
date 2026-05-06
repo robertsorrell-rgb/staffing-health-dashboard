@@ -1,5 +1,6 @@
 node_modules/
 .env
+local-dashboard-dev.json
 sheet-credentials.json
 *.pem
 .DS_Store
