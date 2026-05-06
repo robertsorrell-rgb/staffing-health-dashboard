@@ -1008,6 +1008,81 @@ table.rollup-table tfoot tr.rollup-sum-row td {
   white-space: nowrap;
 }
 
+.ai-brief-header {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.ai-brief-header .section-title {
+  width: auto;
+  max-width: none;
+  text-align: left;
+  flex: 1 1 200px;
+}
+.ai-brief-toolbar {
+  flex: 0 0 auto;
+}
+.ai-brief-hint {
+  text-align: center;
+  margin: -8px 0 16px;
+  font-size: 12px;
+}
+.ai-brief-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.ai-brief-card-wide {
+  grid-column: 1 / -1;
+}
+@media (min-width: 900px) {
+  .ai-brief-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .ai-brief-card-wide {
+    grid-column: 1 / -1;
+  }
+}
+.ai-brief-card-title {
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-sec);
+  margin: 0 0 10px;
+}
+.ai-brief-body {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-pri);
+}
+.ai-brief-p {
+  margin: 0 0 10px;
+}
+.ai-brief-p:last-child {
+  margin-bottom: 0;
+}
+.ai-brief-actions {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.ai-brief-actions li {
+  margin-bottom: 6px;
+}
+.ai-brief-meta {
+  margin-top: 12px;
+  font-size: 11px;
+  text-align: right;
+}
+.btn.btn-secondary {
+  background: #fff;
+  color: var(--navy);
+}
+.btn.btn-secondary:hover {
+  background: var(--cream-alt);
+}
+
 @media (max-width: 720px) {
   .main-content {
     padding: 14px 12px 40px;

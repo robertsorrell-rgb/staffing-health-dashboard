@@ -1212,6 +1212,471 @@ function exceptionPanel(name, data, errMsg, previewPrefs = null) {
   `;
 }
 
+let lastDashboardForBrief = null;
+
+function formatBriefCtHour(h) {
+  if (h == null) return '';
+  const n = Number(h);
+  if (Number.isNaN(n) || n < 0 || n > 23) return String(h);
+  const h12 = n % 12 || 12;
+  const ampm = n < 12 ? 'AM' : 'PM';
+  return `${h12} ${ampm} CT`;
+}
+
+/** Deterministic brief from dashboard context — no external AI or API keys. */
+function generateLocalDailyBrief(context, meta) {
+  const dateStr = meta?.dateStr || '—';
+  const historical = !!meta?.historical;
+  const captured = meta?.capturedAt ? formatTime(meta.capturedAt) : null;
+  const modeLine = historical
+    ? captured
+      ? `Historical snapshot for ${dateStr} (captured ${captured}, read-only).`
+      : `Historical snapshot for ${dateStr} (read-only).`
+    : `Live view for ${dateStr} (Central Time).`;
+
+  const apiErrors = context.apiErrors || {};
+  const errKeys = Object.entries(apiErrors)
+    .filter(([, v]) => v)
+    .map(([k]) => k);
+
+  const summaryParts = [];
+  summaryParts.push(modeLine);
+  if (errKeys.length) {
+    summaryParts.push(
+      `${errKeys.length} data source(s) did not load: ${errKeys.join(', ')}. Treat the story below as partial until those feeds return.`
+    );
+  } else {
+    summaryParts.push('All primary dashboard sources returned for this view.');
+  }
+
+  const ns = context.netStaffing;
+  if (ns?.error) {
+    summaryParts.push(`Net staffing vs target is unavailable (${ns.error}).`);
+  } else if (ns?.rows?.length) {
+    const sortedMin = [...ns.rows]
+      .filter((r) => r.minDeviationPct != null)
+      .sort((a, b) => a.minDeviationPct - b.minDeviationPct);
+    const sortedMax = [...ns.rows]
+      .filter((r) => r.maxDeviationPct != null)
+      .sort((a, b) => b.maxDeviationPct - a.maxDeviationPct);
+    const worstShort = sortedMin[0];
+    const worstLong = sortedMax[0];
+    const src = ns.source ? ` Data source: ${ns.source}.` : '';
+    let line = `Net staffing vs target:${src}`;
+    if (worstShort && worstLong) {
+      line += ` Deepest shortfall: ${worstShort.group} (${worstShort.minDeviationPct}% vs target near ${formatBriefCtHour(worstShort.atHourMin)}). Highest overshoot: ${worstLong.group} (${worstLong.maxDeviationPct}% near ${formatBriefCtHour(worstLong.atHourMax)}).`;
+    } else {
+      line += ' See heatmap for hour-by-hour detail.';
+    }
+    summaryParts.push(line);
+  } else if (ns?.note) {
+    summaryParts.push(`Net staffing: ${ns.note}.`);
+  }
+
+  const id = context.idle;
+  if (id?.error) {
+    summaryParts.push(`Idle time metrics did not load (${id.error}).`);
+  } else if (id) {
+    if (id.note) {
+      summaryParts.push(`Idle log note: ${id.note}`);
+    } else {
+      const idleBits = [];
+      if (id.currentHourFloorIdlePct != null) {
+        idleBits.push(`current-hour floor idle about ${id.currentHourFloorIdlePct}%`);
+      }
+      if (id.dayFloorIdlePct != null) {
+        idleBits.push(`full-day floor idle about ${id.dayFloorIdlePct}%`);
+      }
+      const top = (id.topGroupsByDay || []).slice(0, 4);
+      const topTxt = top.length
+        ? ` Heaviest-idle groups today (merged view): ${top.map((g) => `${g.group} (${g.pct}%)`).join(', ')}.`
+        : '';
+      if (idleBits.length || topTxt) {
+        summaryParts.push(`Idle: ${idleBits.join('; ')}.${topTxt}`);
+      }
+    }
+  }
+
+  const ad = context.adherence;
+  if (ad?.error) {
+    summaryParts.push(`Adherence did not load (${ad.error}).`);
+  } else if (ad && ad.configured === false) {
+    summaryParts.push('Adherence is not configured on this deployment.');
+  } else if (ad) {
+    const p1 = ad.ping1Today;
+    const p2 = ad.ping2Today;
+    const pingTxt =
+      p1 != null || p2 != null ? ` Ping counts today: first ${p1 ?? '—'}, second ${p2 ?? '—'}.` : '';
+    const tm = ad.topManagers || [];
+    if (tm.length) {
+      summaryParts.push(
+        `Adherence alerts lean toward: ${tm.map((m) => `${m.name} (${m.count})`).join(', ')}.${pingTxt}`
+      );
+    } else if (pingTxt) {
+      summaryParts.push(`Adherence:${pingTxt}`);
+    }
+  }
+
+  const x = context.vtoPtoCalloutOt || {};
+  const exc = [];
+  if (x.targetedVtoError) {
+    exc.push(`VTO feeds: ${x.targetedVtoError}.`);
+  } else if (x.approvedVtoHoursTodayCeil != null || (x.vtoTopGroupsToday || []).length) {
+    const vParts = [];
+    if (x.approvedVtoHoursTodayCeil != null) {
+      vParts.push(
+        `Approved VTO (targeted + automated) rounds to about ${x.approvedVtoHoursTodayCeil} h today.`
+      );
+    }
+    const vg = (x.vtoTopGroupsToday || []).slice(0, 4);
+    if (vg.length) {
+      vParts.push(
+        `Most VTO hours by group: ${vg.map((g) => `${g.group} (~${g.totalHoursCeil} h)`).join(', ')}.`
+      );
+    }
+    const fe = (x.vtoFetchErrors || []).join('; ');
+    if (fe) vParts.push(`Partial VTO tab errors: ${fe}.`);
+    if (vParts.length) exc.push(vParts.join(' '));
+  }
+  if (x.bobbotError) exc.push(`Bobbot / PTO preview: ${x.bobbotError}.`);
+  else if (x.bobbot) {
+    let b = `Bobbot shows ${x.bobbot.previewRowCount} preview row(s) for today.`;
+    if (x.bobbot.todayHint) b += ` ${x.bobbot.todayHint}`;
+    exc.push(b);
+  }
+  if (x.calloutError) exc.push(`Call-out tabs: ${x.calloutError}.`);
+  else if (x.calloutRowsToday != null) {
+    exc.push(`Call-out plus attendance notifications: ${x.calloutRowsToday} row(s) so far today.`);
+  }
+  if (x.otFillError) exc.push(`OT fill: ${x.otFillError}.`);
+  else if (x.overtime) {
+    const o = x.overtime;
+    const op = [];
+    if (o.floorFillPct != null) op.push(`floor fill ~${o.floorFillPct}%`);
+    if (o.floorHoursOpen != null && o.floorHoursFilled != null) {
+      op.push(`open ~${o.floorHoursOpen} h, filled ~${o.floorHoursFilled} h`);
+    }
+    if (o.fillWarningsCount) op.push(`${o.fillWarningsCount} early-warning row(s) in the OT panel`);
+    if (o.note) op.push(o.note);
+    if (op.length) exc.push(`Overtime: ${op.join('; ')}.`);
+  }
+  const excJoined = exc.filter(Boolean).join(' ');
+  if (excJoined) summaryParts.push(excJoined);
+
+  const whereParts = [];
+  if (errKeys.length >= 4) {
+    whereParts.push('Several feeds are missing, so situational awareness is limited until sources recover.');
+  } else if (errKeys.length) {
+    whereParts.push('At least one feed is missing; confirm capacity and exceptions in the primary tools for that area.');
+  }
+
+  if (ns?.rows?.length) {
+    const mins = ns.rows.map((r) => r.minDeviationPct).filter((v) => v != null);
+    const meanMin = mins.length ? mins.reduce((a, b) => a + b, 0) / mins.length : null;
+    if (meanMin != null && meanMin <= -4) {
+      whereParts.push('Net staffing skews short of target across multiple slices — expect tighter capacity unless demand eases.');
+    } else if (meanMin != null && meanMin >= 4) {
+      whereParts.push('Net staffing skews above target in aggregate — watch idle and opportunity for VTO or redeployment.');
+    } else {
+      whereParts.push('Net staffing is mixed: a few groups/hours drive most of the story; the heatmap is the source of truth.');
+    }
+  }
+
+  if (id && !id.error && !id.note && id.dayFloorIdlePct != null) {
+    if (id.dayFloorIdlePct >= 32) {
+      whereParts.push('Day-level idle is elevated — capacity is slack unless inbound spikes.');
+    } else if (id.dayFloorIdlePct <= 14) {
+      whereParts.push('Day-level idle is low — the floor is relatively tight on spare capacity.');
+    }
+  }
+
+  if (x.overtime && !x.otFillError && (x.overtime.fillWarningsCount || 0) > 0) {
+    whereParts.push('OT early-warning rows are non-zero — upcoming dates may need extra fill or schedule changes.');
+  }
+
+  if (x.calloutRowsToday != null && x.calloutRowsToday >= 8) {
+    whereParts.push('Call-out / attendance volume is high for the day — staffing stability may need leadership attention.');
+  }
+
+  if (!whereParts.length) {
+    whereParts.push('No single red flag from automated thresholds; use the cards above for hour-specific decisions.');
+  }
+
+  const actions = [];
+  for (const k of errKeys) {
+    actions.push(`Restore the ${k} integration or retry after the upstream error clears.`);
+  }
+  if (ns?.rows?.length) {
+    const sortedMin = [...ns.rows]
+      .filter((r) => r.minDeviationPct != null)
+      .sort((a, b) => a.minDeviationPct - b.minDeviationPct);
+    for (const r of sortedMin.slice(0, 2)) {
+      actions.push(
+        `Staffing: close the gap for ${r.group} around ${formatBriefCtHour(r.atHourMin)} (${r.minDeviationPct}% vs target).`
+      );
+    }
+    const sortedMax = [...ns.rows]
+      .filter((r) => r.maxDeviationPct != null)
+      .sort((a, b) => b.maxDeviationPct - a.maxDeviationPct);
+    const fat = sortedMax[0];
+    if (fat && fat.maxDeviationPct >= 8) {
+      actions.push(
+        `If demand allows, trim or rebalance ${fat.group} near ${formatBriefCtHour(fat.atHourMax)} (${fat.maxDeviationPct}% above target).`
+      );
+    }
+  }
+  const tm0 = ad && ad.topManagers && ad.topManagers[0];
+  if (tm0) {
+    actions.push(`Adherence: coach ${tm0.name} (${tm0.count} alerts) and verify floor expectations.`);
+  }
+  if (id && !id.error && !id.note && id.dayFloorIdlePct != null && id.dayFloorIdlePct >= 32) {
+    actions.push('Idle: offer VTO or offline work where policy allows, without risking SLAs.');
+  }
+  if (x.calloutRowsToday != null && x.calloutRowsToday >= 5) {
+    actions.push("Attendance: review today's call-out list with supervisors and backfill plan.");
+  }
+  const o = x.overtime;
+  if (o && !x.otFillError && o.floorFillPct != null && o.floorFillPct < 65 && o.configured !== false) {
+    actions.push('OT: push slot acceptance or repost shifts — floor fill looks soft.');
+  }
+
+  const seen = new Set();
+  const uniqActions = [];
+  for (const a of actions) {
+    if (!a || seen.has(a)) continue;
+    seen.add(a);
+    uniqActions.push(a);
+    if (uniqActions.length >= 7) break;
+  }
+  if (!uniqActions.length) {
+    uniqActions.push('Refresh after the next data pull; thresholds did not fire on this snapshot.');
+  }
+
+  return {
+    daily_summary: summaryParts.join('\n\n'),
+    where_we_are: whereParts.join('\n\n'),
+    suggested_actions: uniqActions,
+  };
+}
+
+function buildDashboardBriefContext(results, errors) {
+  const ctx = {
+    apiErrors: { ...errors },
+    netStaffing: null,
+    idle: null,
+    adherence: null,
+    vtoPtoCalloutOt: {},
+  };
+
+  const ns = results['net-staffing'];
+  if (errors['net-staffing']) ctx.netStaffing = { error: errors['net-staffing'] };
+  else if (ns?.ok && Array.isArray(ns.matrix) && ns.matrix.length) {
+    const hours = ns.hours || [];
+    const rowSummaries = ns.matrix.map((row) => {
+      const hmap = row.hours || {};
+      let minV = Infinity;
+      let maxV = -Infinity;
+      let minH = null;
+      let maxH = null;
+      for (const h of hours) {
+        const key = String(h);
+        const v = hmap[key];
+        if (v == null || Number.isNaN(Number(v))) continue;
+        const n = Number(v);
+        if (n < minV) {
+          minV = n;
+          minH = h;
+        }
+        if (n > maxV) {
+          maxV = n;
+          maxH = h;
+        }
+      }
+      return {
+        group: row.group,
+        minDeviationPct: minV === Infinity ? null : minV,
+        atHourMin: minH,
+        maxDeviationPct: maxV === -Infinity ? null : maxV,
+        atHourMax: maxH,
+      };
+    });
+    ctx.netStaffing = {
+      source: ns.source || null,
+      hourRange: hours.length ? [hours[0], hours[hours.length - 1]] : [],
+      rows: rowSummaries,
+    };
+  } else {
+    ctx.netStaffing = { ok: ns?.ok, note: ns?.note || 'No matrix' };
+  }
+
+  const idle = results['idle-hourly-log'];
+  if (errors['idle-hourly-log']) ctx.idle = { error: errors['idle-hourly-log'] };
+  else if (idle) {
+    const gd = idle.groups_by_day;
+    const topGroupsByDay =
+      gd && typeof gd === 'object' ? sortedIdleGroupEntries(gd).slice(0, 8) : [];
+    ctx.idle = {
+      note: idle.note || null,
+      currentHourFloorIdlePct: idle.current_hour_floor_idle ?? null,
+      dayFloorIdlePct: idle.day_floor_idle_pct ?? null,
+      kpiHour: idle.kpi_hour ?? idle.ct_current_hour ?? null,
+      topGroupsByDay: topGroupsByDay.map(([g, pct]) => ({ group: g, pct })),
+    };
+  }
+
+  const adh = results['adherence'];
+  if (errors['adherence']) ctx.adherence = { error: errors['adherence'] };
+  else if (adh) {
+    ctx.adherence = {
+      configured: adh.configured !== false,
+      ping1Today: adh.ping1_today ?? null,
+      ping2Today: adh.ping2_today ?? null,
+      topManagers: (adh.top_managers || []).slice(0, 8),
+    };
+  }
+
+  const tv = results['targeted-vto'] || {};
+  const av = results['auto-vto'] || {};
+  if (errors['targeted-vto']) {
+    ctx.vtoPtoCalloutOt.targetedVtoError = errors['targeted-vto'];
+  } else if (tv && typeof tv === 'object') {
+    const rollup = tv.rollup || {};
+    const autoRoll = tv.automated_rollup || {};
+    const combined = tv.combined || {};
+    const sum = tv.summary || {};
+    const autoSum = av.summary || {};
+    const hoursTargeted = sum.hours_targeted_from_offers ?? rollup.total_hours ?? 0;
+    const hoursAuto =
+      sum.hours_auto_approved ?? autoRoll.hours_approved_today ?? autoSum.hours_approved_today ?? 0;
+    const hoursCombined =
+      sum.hours_combined_approved ??
+      combined.hours_approved ??
+      Math.round((Number(hoursTargeted || 0) + Number(hoursAuto || 0)) * 100) / 100;
+    const merged = mergeCombinedByGroupRows(combined.by_group || []);
+    ctx.vtoPtoCalloutOt.approvedVtoHoursTodayCeil = Math.ceil(Number(hoursCombined) || 0);
+    ctx.vtoPtoCalloutOt.vtoTopGroupsToday = merged.slice(0, 6).map((r) => ({
+      group: r.group,
+      totalHoursCeil: Math.ceil((Number(r.targeted_hours) || 0) + (Number(r.automated_hours) || 0)),
+    }));
+    const fe = [tv.targeted_fetch_error, tv.auto_fetch_error].filter(Boolean);
+    if (fe.length) ctx.vtoPtoCalloutOt.vtoFetchErrors = fe;
+  }
+
+  const bb = results['bobbot'];
+  if (errors['bobbot']) ctx.vtoPtoCalloutOt.bobbotError = errors['bobbot'];
+  else if (bb && typeof bb === 'object') {
+    const prev = bb.rows_preview;
+    ctx.vtoPtoCalloutOt.bobbot = {
+      configured: bb.configured !== false,
+      previewRowCount: Array.isArray(prev) ? prev.length : 0,
+    };
+    if (bb.today_hint) ctx.vtoPtoCalloutOt.bobbot.todayHint = String(bb.today_hint).slice(0, 200);
+  }
+
+  const co = results['callout'];
+  if (errors['callout']) ctx.vtoPtoCalloutOt.calloutError = errors['callout'];
+  else if (co && typeof co === 'object') {
+    const n =
+      (co.call_out_main?.rows_today ?? 0) + (co.attendance_notifications?.rows_today ?? 0);
+    ctx.vtoPtoCalloutOt.calloutRowsToday = n;
+    ctx.vtoPtoCalloutOt.calloutConfigured = co.configured !== false;
+  }
+
+  const ot = results['ot-fill-rate'];
+  if (errors['ot-fill-rate']) ctx.vtoPtoCalloutOt.otFillError = errors['ot-fill-rate'];
+  else if (ot && typeof ot === 'object') {
+    ctx.vtoPtoCalloutOt.overtime = {
+      configured: ot.configured !== false,
+      floorFillPct: ot.floor_fill_pct ?? null,
+      floorHoursOpen: ot.floor_hours_open ?? null,
+      floorHoursFilled: ot.floor_hours_filled ?? null,
+      fillWarningsCount: Array.isArray(ot.fill_warnings) ? ot.fill_warnings.length : null,
+      note: ot.note ? String(ot.note).slice(0, 240) : null,
+    };
+    if (ot.by_group && typeof ot.by_group === 'object') {
+      ctx.vtoPtoCalloutOt.overtime.sampleGroups = Object.entries(ot.by_group)
+        .slice(0, 8)
+        .map(([g, row]) => {
+          const fillPct = typeof row === 'object' && row && row.fill_pct != null ? row.fill_pct : row;
+          return { group: g, fillPct };
+        });
+    }
+  }
+
+  return ctx;
+}
+
+function renderBriefParagraphs(container, text) {
+  if (!container) return;
+  const parts = String(text || '')
+    .split(/\n\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (!parts.length) {
+    container.innerHTML = '<p class="panel-muted">No summary returned.</p>';
+    return;
+  }
+  container.innerHTML = parts.map((p) => `<p class="ai-brief-p">${escapeHtml(p)}</p>`).join('');
+}
+
+function renderBriefActions(container, items) {
+  if (!container) return;
+  if (!items.length) {
+    container.innerHTML = '<p class="panel-muted">None suggested.</p>';
+    return;
+  }
+  container.innerHTML = `<ul class="ai-brief-actions">${items.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`;
+}
+
+function resetAiBriefPanel(message) {
+  const summaryEl = document.getElementById('ai-brief-summary');
+  const whereEl = document.getElementById('ai-brief-where');
+  const actionsEl = document.getElementById('ai-brief-actions');
+  const errEl = document.getElementById('ai-brief-error');
+  const metaEl = document.getElementById('ai-brief-meta');
+  if (!summaryEl || !whereEl || !actionsEl || !errEl || !metaEl) return;
+  lastDashboardForBrief = null;
+  errEl.hidden = true;
+  errEl.textContent = '';
+  metaEl.textContent = '';
+  summaryEl.innerHTML = message ? `<p class="panel-muted">${escapeHtml(message)}</p>` : '';
+  whereEl.innerHTML = '';
+  actionsEl.innerHTML = '';
+}
+
+function updateAiBriefPanel(payload) {
+  const summaryEl = document.getElementById('ai-brief-summary');
+  const whereEl = document.getElementById('ai-brief-where');
+  const actionsEl = document.getElementById('ai-brief-actions');
+  const errEl = document.getElementById('ai-brief-error');
+  const metaEl = document.getElementById('ai-brief-meta');
+  if (!summaryEl || !whereEl || !actionsEl || !errEl || !metaEl) return;
+
+  if (!payload || !payload.results) {
+    metaEl.textContent = '';
+    return;
+  }
+
+  errEl.hidden = true;
+  errEl.textContent = '';
+  metaEl.textContent = 'Generated locally from current metrics';
+
+  try {
+    const context = buildDashboardBriefContext(payload.results, payload.errors || {});
+    const data = generateLocalDailyBrief(context, payload.meta || {});
+    renderBriefParagraphs(summaryEl, data.daily_summary || '');
+    renderBriefParagraphs(whereEl, data.where_we_are || '');
+    renderBriefActions(actionsEl, data.suggested_actions || []);
+  } catch (e) {
+    errEl.hidden = false;
+    errEl.textContent = e.message || String(e);
+    summaryEl.innerHTML = '';
+    whereEl.innerHTML = '';
+    actionsEl.innerHTML = '';
+    metaEl.textContent = '';
+  }
+}
+
 let lastFetched = {};
 
 async function fetchLiveDashboard() {
@@ -1361,6 +1826,12 @@ async function loadDashboard() {
         return `<span class="freshness-item"><strong>${key}</strong>: ${t ? formatTime(t) : `<span style="color:var(--red)">${errors[key] || 'error'}</span>`}</span>`;
       }).join('');
       applyDashboardData(results, errors);
+      lastDashboardForBrief = {
+        results,
+        errors,
+        meta: { dateStr, historical: false, capturedAt: null },
+      };
+      updateAiBriefPanel(lastDashboardForBrief);
     } else {
       if (histBadge) histBadge.hidden = false;
       const r = await fetch(`/api/dashboard-snapshot?date=${encodeURIComponent(dateStr)}`, {
@@ -1379,14 +1850,22 @@ async function loadDashboard() {
         const errMap = {};
         for (const [key] of ENDPOINTS) errMap[key] = data.error || 'No snapshot';
         applyDashboardData({}, errMap);
+        resetAiBriefPanel('Historical snapshot not available for this date.');
         return;
       }
       const cap = data.captured_at ? formatTime(data.captured_at) : '—';
       freshness.innerHTML = `<span class="freshness-item"><strong>Historical</strong>: ${escapeHtml(dateStr)} · captured ${escapeHtml(cap)} · read-only</span>`;
       applyDashboardData(data.results || {}, data.errors || {});
+      lastDashboardForBrief = {
+        results: data.results || {},
+        errors: data.errors || {},
+        meta: { dateStr, historical: true, capturedAt: data.captured_at || null },
+      };
+      updateAiBriefPanel(lastDashboardForBrief);
     }
   } catch (e) {
     freshness.innerHTML = `<span class="freshness-item"><span style="color:var(--red)">${escapeHtml(e.message || String(e))}</span></span>`;
+    resetAiBriefPanel('Dashboard refresh failed; brief was reset.');
   }
 }
 
@@ -1430,6 +1909,9 @@ tickClock();
 setInterval(tickClock, 1000);
 
 document.getElementById('btn-refresh').addEventListener('click', () => loadDashboard());
+document.getElementById('btn-ai-brief-refresh')?.addEventListener('click', () => {
+  if (lastDashboardForBrief) void updateAiBriefPanel(lastDashboardForBrief);
+});
 
 initDashboardDatePicker();
 loadDashboard();

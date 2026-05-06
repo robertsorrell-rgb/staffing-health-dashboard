@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staffing Health Dashboard</title>
-  <link rel="stylesheet" href="css/styles.css?v=59" />
+  <link rel="stylesheet" href="css/styles.css?v=60" />
 </head>
 <body>
   <header class="app-header" role="banner">
@@ -82,8 +82,38 @@
       </div>
       <div class="panel-grid exceptions-grid" id="exceptions-grid"></div>
     </section>
+
+    <section class="section-block ai-brief-section" aria-labelledby="ai-brief-title">
+      <div class="section-header ai-brief-header">
+        <h2 class="section-title" id="ai-brief-title">Daily brief</h2>
+        <div class="ai-brief-toolbar">
+          <button type="button" class="btn btn-secondary" id="btn-ai-brief-refresh" aria-label="Regenerate daily brief from current metrics">
+            Regenerate
+          </button>
+        </div>
+      </div>
+      <p class="panel-muted ai-brief-hint">
+        Auto-generated in your browser from the metrics above (no external AI or API keys).
+      </p>
+      <div class="ai-brief-grid">
+        <article class="panel-card ai-brief-card">
+          <h3 class="ai-brief-card-title">Daily summary</h3>
+          <div class="ai-brief-body" id="ai-brief-summary"></div>
+        </article>
+        <article class="panel-card ai-brief-card">
+          <h3 class="ai-brief-card-title">Where we are</h3>
+          <div class="ai-brief-body" id="ai-brief-where"></div>
+        </article>
+        <article class="panel-card ai-brief-card ai-brief-card-wide">
+          <h3 class="ai-brief-card-title">Suggested actions</h3>
+          <div class="ai-brief-body" id="ai-brief-actions"></div>
+        </article>
+      </div>
+      <p class="panel-error" id="ai-brief-error" hidden role="alert"></p>
+      <p class="panel-muted ai-brief-meta" id="ai-brief-meta"></p>
+    </section>
   </main>
 
-  <script type="module" src="js/app.js?v=65"></script>
+  <script type="module" src="js/app.js?v=67"></script>
 </body>
 </html>
