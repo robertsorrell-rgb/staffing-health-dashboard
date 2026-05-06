@@ -894,7 +894,8 @@ a.digest-link {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 10px 14px;
-  margin-bottom: 20px;
+  margin-top: 28px;
+  margin-bottom: 0;
   font-size: 11px;
   color: var(--text-sec);
   display: flex;
