@@ -2297,6 +2297,11 @@ function renderSpeedToLeadPanel(data, errMsg) {
     ? `<p class="panel-muted" style="margin-top:8px;line-height:1.4;">${escapeHtml(data.note)}</p>`
     : '';
 
+  const capNote =
+    sum.rows_excluded_above_cap > 0 && sum.summary_cap_minutes != null
+      ? `<p class="panel-muted" style="margin-top:8px;">${escapeHtml(String(sum.rows_excluded_above_cap))} lead(s) over ${escapeHtml(String(sum.summary_cap_minutes))} min omitted from average/median.</p>`
+      : '';
+
   const avg = sum.avg_speed_to_lead_minutes;
   const med = sum.median_speed_to_lead_minutes;
   const kpi = `<div class="stl-kpi-row">
@@ -2320,7 +2325,7 @@ function renderSpeedToLeadPanel(data, errMsg) {
       '<p class="panel-muted" style="margin-top:12px;">No numeric speed-to-lead values parsed for today — check column detection or set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX.</p>';
   }
 
-  body.innerHTML = note + kpi + table;
+  body.innerHTML = note + capNote + kpi + table;
 }
 
 function applyDashboardData(results, errors) {

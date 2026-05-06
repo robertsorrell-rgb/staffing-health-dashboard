@@ -159,17 +159,25 @@ function parseMinutes(cell) {
 function headerSuggestsSecondsColumn(headerName) {
   const h = String(headerName || '').trim().toLowerCase();
   if (/\bbucket\b/.test(h)) return false;
-  if (/\b_sec\b|\b_secs\b|\b_seconds\b/.test(h)) return true;
+  // Use "_sec\b" not "\b_sec\b" — `\b` does not separate letters from underscores (e.g. activated_sec).
+  if (/_sec\b|_secs\b|_seconds\b/.test(h)) return true;
   if (/seconds?$/.test(h) && !h.includes('minute')) return true;
   return false;
 }
 
-/** Numeric STL value as dashboard minutes (handles *_sec fields). */
+/**
+ * Numeric STL as dashboard minutes. *_sec Looker fields are usually seconds;
+ * very large values are often milliseconds mis-stored, which would inflate averages.
+ */
 function speedValueAsMinutes(cell, headerName) {
   const raw = parseMinutes(cell);
   if (raw == null || !Number.isFinite(raw)) return null;
-  if (headerSuggestsSecondsColumn(headerName)) return raw / 60;
-  return raw;
+  if (!headerSuggestsSecondsColumn(headerName)) return raw;
+
+  const asSec = raw / 60;
+  const asMs = raw / 60000;
+  if (raw >= 2000 && asSec > 480 && asMs <= 240) return asMs;
+  return asSec;
 }
 
 function median(nums) {
@@ -335,12 +343,21 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
   }
 
   const MAX_MIN = 10080;
+  const capRaw = parseInt(env('SPEED_TO_LEAD_SUMMARY_CAP_MINUTES'), 10);
+  const summaryCapMin =
+    Number.isFinite(capRaw) && capRaw > 0 ? capRaw : 1440;
+
   const minutesList = [];
   const byGroup = new Map();
+  let excludedAboveCap = 0;
 
   for (const row of rows) {
     const mins = speedValueAsMinutes(row[speedCol], headers[speedCol]);
     if (mins == null || mins < 0 || mins > MAX_MIN) continue;
+    if (mins > summaryCapMin) {
+      excludedAboveCap += 1;
+      continue;
+    }
     minutesList.push(mins);
     const g = sgCol >= 0 ? String(row[sgCol] ?? '').trim() || '—' : '—';
     const cur = byGroup.get(g) || { sum: 0, n: 0 };
@@ -378,6 +395,12 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
       rows_with_valid_minutes: minutesList.length,
       avg_speed_to_lead_minutes: avg,
       median_speed_to_lead_minutes: med != null ? Math.round(med * 100) / 100 : null,
+      ...(excludedAboveCap > 0
+        ? {
+            rows_excluded_above_cap: excludedAboveCap,
+            summary_cap_minutes: summaryCapMin,
+          }
+        : {}),
     },
     by_sales_group: by_sales_group.slice(0, 32),
     fetched_at: new Date().toISOString(),

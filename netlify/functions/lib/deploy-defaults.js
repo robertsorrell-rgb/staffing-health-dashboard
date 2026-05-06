@@ -20,6 +20,8 @@ const DEFAULTS = {
   SPEED_TO_LEAD_SPREADSHEET_ID: '1clGnZjpQSJOhy65yH6Gx4V33UxyYa_eAHhDu15lrm-k',
   SPEED_TO_LEAD_TAB: 'Intraday Leads 4 16.csv',
   SPEED_TO_LEAD_CACHE_SECONDS: '180',
+  /** Drop STL rows above this many minutes from avg/median (long-tail / bad timestamps). */
+  SPEED_TO_LEAD_SUMMARY_CAP_MINUTES: '1440',
   ADHERENCE_SPREADSHEET_ID: '16OLaJrpyNHzh9Oqd5GV3JdSx0YJeyu8a4qD38WTpcgU',
   ADHERENCE_ALERTS_TAB: 'Adherence_Alert_Log',
   /** Live Floor tab — current OOA rows for dashboard list (Name, Flex State, Adherence). */
