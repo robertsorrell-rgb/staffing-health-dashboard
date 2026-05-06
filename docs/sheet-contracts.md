@@ -239,13 +239,13 @@ Datetime serials must yield the calendar date in **America/Chicago** (not UTC mi
 
 ## Bobbot — Bobbot_History
 
-**Spreadsheet ID:** `1gndsQQZdIJ5sr0XPP6aafRnQ95ZT4KXPQk5882To4F0` (`BOBBOT_SPREADSHEET_ID`)
+**Spreadsheet ID:** `1gndsQQZdIJ5sr0XPP6aafRnQ95ZT4KXPQk5882To4F0` (hardcoded in `netlify/functions/bobbot.js`)
 
 **Sheet URL:** `https://docs.google.com/spreadsheets/d/1gndsQQZdIJ5sr0XPP6aafRnQ95ZT4KXPQk5882To4F0/edit`
 
-**Tab:** `Bobbot_History` (`BOBBOT_TAB`)
+**Tab:** `Bobbot_History` (hardcoded — **`BOBBOT_*` env vars are not used** by the function.)
 
-**Dashboard:** `GET /api/bobbot` reads this tab only. If Netlify **`BOBBOT_TAB`** is set to another sheet (e.g. `Gmail_Import`), the Bobbot (PTO) card will show the wrong rows — leave unset or set exactly `Bobbot_History`. The API returns **`sheet_source_note`** (tab + date column used) so you can confirm in the UI.
+**Dashboard:** `GET /api/bobbot` filters rows whose **`request_date`** equals **today (Central)**. Rows are padded to header width so sparse API arrays still line up with columns. **`CANCELLED` / `CANCELED`** (Decision column) are **excluded** from the count and preview. Response includes **`sheet_source_note`** and **`rows_cancelled_excluded`**.
 
 ### Header row (row 1) — verified 2026-05-05
 

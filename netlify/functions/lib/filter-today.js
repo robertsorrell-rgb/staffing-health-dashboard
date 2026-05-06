@@ -3,6 +3,14 @@
 const { getSheetValues, normalizeDateCell } = require('../_sheets.js');
 const { todayCTDateStr } = require('./ct.js');
 
+/** Sheets often omit trailing empty cells — pad so column indices align with header row. */
+function padRowToHeaders(row, headerLen) {
+  const n = Math.max(0, headerLen | 0);
+  const r = Array.isArray(row) ? row : [];
+  if (r.length >= n) return r.slice(0, n);
+  return r.concat(Array(n - r.length).fill(''));
+}
+
 /**
  * Reads a tab; uses row 1 as headers; filters body rows whose date column matches today CT.
  * @param {{ preferDateHeaders?: string[] }} [opts] — try these header labels first (exact match, case-insensitive).
@@ -15,7 +23,14 @@ async function readSheetFilterToday(spreadsheetId, tab, a1Suffix = 'A1:Z10000', 
     dateTimeRenderOption: 'SERIAL_NUMBER',
   });
   if (!values.length) {
-    return { headers: [], rowsToday: [], rowsAll: [], dateCol: 0, today: todayCTDateStr() };
+    return {
+      headers: [],
+      rowsToday: [],
+      rowsAll: [],
+      dateCol: 0,
+      today: todayCTDateStr(),
+      dateHeader: '',
+    };
   }
   const headers = (values[0] || []).map((h) => String(h || '').trim());
   let dateCol = -1;
@@ -43,10 +58,12 @@ async function readSheetFilterToday(spreadsheetId, tab, a1Suffix = 'A1:Z10000', 
   if (dateCol < 0) dateCol = 0;
   const today = todayCTDateStr();
   const body = values.slice(1);
+  const hl = headers.length;
   const rowsToday = [];
   for (const row of body) {
-    const d = normalizeDateCell(row[dateCol]);
-    if (d === today) rowsToday.push(row);
+    const full = padRowToHeaders(row, hl);
+    const d = normalizeDateCell(full[dateCol]);
+    if (d === today) rowsToday.push(full);
   }
   const dateHeader =
     dateCol >= 0 && dateCol < headers.length ? String(headers[dateCol] || '').trim() : '';
@@ -101,10 +118,12 @@ async function readSheetFilterWeek(spreadsheetId, tab, a1Suffix = 'A1:Z10000', o
   }
   if (dateCol < 0) dateCol = 0;
   const body = values.slice(1);
+  const hl = headers.length;
   const rowsWeek = [];
   for (const row of body) {
-    const d = normalizeDateCell(row[dateCol]);
-    if (d && d >= weekStartYmd && d <= weekEndYmd) rowsWeek.push(row);
+    const full = padRowToHeaders(row, hl);
+    const d = normalizeDateCell(full[dateCol]);
+    if (d && d >= weekStartYmd && d <= weekEndYmd) rowsWeek.push(full);
   }
   return { headers, rowsWeek, rowsAll: body, dateCol, today: todayCTDateStr(), weekStartYmd, weekEndYmd };
 }
