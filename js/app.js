@@ -165,13 +165,16 @@ function renderSparkline(container, spark) {
   const defined = vals.filter((v) => v != null);
   if (!defined.length) return;
 
-  const w = 440;
+  const w = 472;
   const chartH = 48;
   const axisH = 26;
   const padX = 12;
+  /** Left gutter for % axis labels */
+  const padYL = 34;
   const padTop = 8;
   const totalH = padTop + chartH + axisH;
-  const plotW = w - padX * 2;
+  const plotRight = w - padX;
+  const plotW = plotRight - padYL;
 
   const hoursPresent = spark.map((s) => s.hour).filter((h) => h != null && Number.isFinite(Number(h)));
   let minH;
@@ -181,18 +184,21 @@ function renderSparkline(container, spark) {
     minH = Math.min(...hoursPresent);
     maxH = Math.max(...hoursPresent);
     const hourSpan = Math.max(maxH - minH, 1e-6);
-    xPos = (hour) => padX + ((hour - minH) / hourSpan) * plotW;
+    xPos = (hour) => padYL + ((hour - minH) / hourSpan) * plotW;
   } else {
     minH = 0;
     maxH = Math.max(spark.length - 1, 1);
     const idxSpan = Math.max(spark.length - 1, 1);
-    xPos = (_hour, i = 0) => padX + (i / idxSpan) * plotW;
+    xPos = (_hour, i = 0) => padYL + (i / idxSpan) * plotW;
   }
 
-  const min = Math.min(...defined, 0);
-  const max = Math.max(...defined, 100);
-  const vSpan = max - min || 1;
-  const yAt = (v) => padTop + chartH - ((v - min) / vSpan) * chartH;
+  /** Idle % is 0–100; fixed scale matches left axis. */
+  const yAt = (v) => {
+    const n = Number(v);
+    const clamped = Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
+    return padTop + chartH - (clamped / 100) * chartH;
+  };
+  const yAtPct = (pct) => padTop + chartH - (pct / 100) * chartH;
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', `0 0 ${w} ${totalH}`);
@@ -200,6 +206,26 @@ function renderSparkline(container, spark) {
   svg.classList.add('sparkline-svg');
   const axisY = padTop + chartH;
   const tickHours = hoursPresent.length ? pickSparklineHourTicks(minH, maxH) : [];
+
+  const yPctTicks = [100, 50, 0];
+  for (const p of yPctTicks) {
+    const y = yAtPct(p);
+    const hline = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    hline.setAttribute('x1', String(padYL));
+    hline.setAttribute('y1', String(y));
+    hline.setAttribute('x2', String(plotRight));
+    hline.setAttribute('y2', String(y));
+    hline.setAttribute('class', 'sparkline-grid-h');
+    svg.appendChild(hline);
+    const ylab = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    ylab.setAttribute('x', String(padYL - 6));
+    ylab.setAttribute('y', String(y + 3));
+    ylab.setAttribute('text-anchor', 'end');
+    ylab.setAttribute('class', 'sparkline-y-label');
+    ylab.textContent = `${p}%`;
+    svg.appendChild(ylab);
+  }
+
   for (const th of tickHours) {
     const x = xPos(th);
     const grid = document.createElementNS('http://www.w3.org/2000/svg', 'line');
