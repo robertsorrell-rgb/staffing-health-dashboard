@@ -678,9 +678,6 @@ a.digest-link {
   text-transform: uppercase;
   color: var(--navy);
 }
-.vto-scope-week .vto-period-label {
-  color: var(--coral);
-}
 .vto-period-meta {
   display: block;
   margin-top: 6px;
