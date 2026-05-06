@@ -452,6 +452,51 @@ a.digest-link {
 .rollup-section-title {
   margin-top: 14px !important;
 }
+
+/* VTO card: clearly separate Today vs This week */
+.vto-scope-today {
+  padding-bottom: 18px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-str);
+}
+.vto-scope-week {
+  margin-top: 20px;
+}
+.vto-period-title {
+  margin: 0 0 12px;
+  padding: 0;
+  font: inherit;
+  line-height: 1.3;
+}
+.vto-period-label {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--navy);
+}
+.vto-scope-week .vto-period-label {
+  color: var(--coral);
+}
+.vto-period-meta {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-sec);
+  letter-spacing: 0.02em;
+}
+.rollup-table-caption {
+  margin: 14px 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-sec);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
 table.rollup-table {
   font-size: 11px;
 }

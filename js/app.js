@@ -358,7 +358,7 @@ function formatHoursCeilUp(h) {
   return String(Math.ceil(num));
 }
 
-function htmlVtoCombinedByGroupTable(mergedRows, sectionTitle) {
+function htmlVtoCombinedByGroupTable(mergedRows, captionText) {
   if (!mergedRows?.length) return '';
   let sumTh = 0;
   let sumAh = 0;
@@ -378,7 +378,10 @@ function htmlVtoCombinedByGroupTable(mergedRows, sectionTitle) {
     })
     .join('');
   const foot = `<tfoot><tr class="rollup-sum-row"><td>Total</td><td class="num">${formatHoursCeilUp(sumTh)}</td><td class="num">${formatHoursCeilUp(sumAh)}</td><td class="num">${String(sumTotalCeil)}</td></tr></tfoot>`;
-  return `<div class="panel-sub rollup-section-title">${escapeHtml(sectionTitle)}</div><div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody>${foot}</table></div>`;
+  const cap = captionText
+    ? `<p class="rollup-table-caption">${escapeHtml(captionText)}</p>`
+    : '';
+  return `${cap}<div class="preview-table-wrap"><table class="preview-table rollup-table">${h}<tbody>${b}</tbody>${foot}</table></div>`;
 }
 
 /** Combined VTO = Offers(COMMITTED) + Requests_Submissions(Decision Approved). */
@@ -412,7 +415,9 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       body += `<p class="panel-error">Automated panel fallback: ${escapeHtml(autoPanelErr)}</p>`;
     }
 
-    body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours today</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursCombined)} h</strong></div>`;
+    body += `<section class="vto-scope vto-scope-today" aria-labelledby="vto-head-today">`;
+    body += `<h3 class="vto-period-title" id="vto-head-today"><span class="vto-period-label">Today</span><span class="vto-period-meta">Central calendar · Offers COMMITTED + automated Decision = Approved</span></h3>`;
+    body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursCombined)} h</strong></div>`;
 
     if (typeof rollup.rows_missing_hours === 'number' && rollup.rows_missing_hours > 0) {
       body += `<p class="panel-muted rollup-missing">${rollup.rows_missing_hours} COMMITTED offer row(s) missing hour value.</p>`;
@@ -421,21 +426,22 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       body += `<p class="panel-muted rollup-missing">Requests_Submissions rows found today, but none had Decision = Approved.</p>`;
     }
 
-    body += htmlVtoCombinedByGroupTable(
-      mergeCombinedByGroupRows(combined.by_group || []),
-      'Combined by sales group (today)'
-    );
+    body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combined.by_group || []), 'By sales group');
+    body += `</section>`;
 
+    body += `<section class="vto-scope vto-scope-week" aria-labelledby="vto-head-week">`;
+    const weekMetaLine = combinedWeek.label
+      ? `${combinedWeek.label} · Sun–Sat (CT)`
+      : 'Sun–Sat · Central Time';
+    body += `<h3 class="vto-period-title" id="vto-head-week"><span class="vto-period-label">This week</span><span class="vto-period-meta">${escapeHtml(weekMetaLine)}</span></h3>`;
     if (combinedWeek.targeted_fetch_error) {
       body += `<p class="panel-error">Offers tab (week): ${escapeHtml(combinedWeek.targeted_fetch_error)}</p>`;
     }
     if (combinedWeek.auto_fetch_error) {
       body += `<p class="panel-error">Requests_Submissions tab (week): ${escapeHtml(combinedWeek.auto_fetch_error)}</p>`;
     }
-    const weekTitle = combinedWeek.label
-      ? `Combined by sales group (${combinedWeek.label}; Sun–Sat, CT)`
-      : 'Combined by sales group (this week; Sun–Sat, CT)';
-    body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combinedWeek.by_group || []), weekTitle);
+    body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combinedWeek.by_group || []), 'By sales group');
+    body += `</section>`;
   }
 
   return `
