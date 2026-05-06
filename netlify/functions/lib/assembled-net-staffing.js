@@ -163,7 +163,7 @@ function emptyPullStats() {
     apiRows: 0,
     acceptedRows: 0,
     droppedBadStart: 0,
-    droppedWrongDay: 0,
+    droppedOutsideRequestRange: 0,
     droppedOutsideOpWindow: 0,
     droppedBadNet: 0,
   };
@@ -174,7 +174,7 @@ function addPullStats(a, b) {
     apiRows: a.apiRows + b.apiRows,
     acceptedRows: a.acceptedRows + b.acceptedRows,
     droppedBadStart: a.droppedBadStart + b.droppedBadStart,
-    droppedWrongDay: a.droppedWrongDay + b.droppedWrongDay,
+    droppedOutsideRequestRange: a.droppedOutsideRequestRange + b.droppedOutsideRequestRange,
     droppedOutsideOpWindow: a.droppedOutsideOpWindow + b.droppedOutsideOpWindow,
     droppedBadNet: a.droppedBadNet + b.droppedBadNet,
   };
@@ -224,7 +224,6 @@ async function pullForecastBuckets({
   siteId,
   omitSiteFilter,
   pageSize,
-  dateIso,
   opStartMin,
   opEndMin,
 }) {
@@ -270,10 +269,9 @@ async function pullForecastBuckets({
           stats.droppedBadStart += 1;
           continue;
         }
-        const slotMs = startUnix * 1000;
-        const ctDay = new Date(slotMs).toLocaleDateString('en-CA', { timeZone: TZ });
-        if (ctDay !== dateIso) {
-          stats.droppedWrongDay += 1;
+        /** Trust the API query window (Unix); CT date-string checks rejected valid rows on some runtimes. */
+        if (startUnix < startSec || startUnix >= endSec) {
+          stats.droppedOutsideRequestRange += 1;
           continue;
         }
 
@@ -405,7 +403,6 @@ async function loadNetStaffingFromAssembled() {
     siteId,
     omitSiteFilter: envSkipSite,
     pageSize,
-    dateIso,
     opStartMin,
     opEndMin,
   });
@@ -428,7 +425,6 @@ async function loadNetStaffingFromAssembled() {
       siteId,
       omitSiteFilter: true,
       pageSize,
-      dateIso,
       opStartMin,
       opEndMin,
     });
@@ -446,7 +442,7 @@ async function loadNetStaffingFromAssembled() {
         ', '
       )}. Names must match Assembled (see CAP_QUEUE_MAP / ASSEMBLED_NET_STAFFING_QUEUES). Site “${siteName}”, channel “${channel}”.`;
     } else if (pullStats.apiRows > 0 && pullStats.acceptedRows === 0) {
-      emptyNote = `Assembled returned ${pullStats.apiRows} staffing intervals for channel “${channel}” but none counted toward today CT (${dateIso}) or op window minutes ${opStartMin}–${opEndMin} (wrong CT day: ${pullStats.droppedWrongDay}, outside window: ${pullStats.droppedOutsideOpWindow}, unusable net: ${pullStats.droppedBadNet}, bad timestamps: ${pullStats.droppedBadStart}). Adjust ASSEMBLED_OP_* or confirm API interval timestamps are UTC seconds.`;
+      emptyNote = `Assembled returned ${pullStats.apiRows} staffing intervals for channel “${channel}” but none counted for ${dateIso} CT (outside API Unix window: ${pullStats.droppedOutsideRequestRange}, outside op minutes ${opStartMin}–${opEndMin}: ${pullStats.droppedOutsideOpWindow}, unusable net: ${pullStats.droppedBadNet}, bad timestamps: ${pullStats.droppedBadStart}). Adjust ASSEMBLED_OP_* or interval alignment.`;
     } else {
       const siteHint = envSkipSite
         ? 'site filter off (ASSEMBLED_SKIP_SITE_FILTER)'
