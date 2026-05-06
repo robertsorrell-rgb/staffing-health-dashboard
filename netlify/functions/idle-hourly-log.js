@@ -180,6 +180,30 @@ exports.handler = async (event) => {
       }
     }
 
+    /** Same weighting as hourly, summed across all hours with data for this calendar day. */
+    let dayAvailSum = 0;
+    let dayDenomSum = 0;
+    for (const v of Object.values(rollup)) {
+      dayAvailSum += v.avail;
+      dayDenomSum += v.denom;
+    }
+    const day_floor_idle_pct =
+      dayDenomSum > 0 ? Math.round((dayAvailSum / dayDenomSum) * 1000) / 10 : null;
+
+    const groupDayAgg = {};
+    for (const gmap of Object.values(groupsByHour)) {
+      for (const [g, x] of Object.entries(gmap)) {
+        if (!groupDayAgg[g]) groupDayAgg[g] = { available: 0, on_call: 0 };
+        groupDayAgg[g].available += x.available;
+        groupDayAgg[g].on_call += x.on_call;
+      }
+    }
+    const groups_by_day = {};
+    for (const [g, x] of Object.entries(groupDayAgg)) {
+      const d = x.available + x.on_call;
+      groups_by_day[g] = d > 0 ? Math.round((x.available / d) * 1000) / 10 : null;
+    }
+
     const nowH = dateFilter === todayCTDateStr() ? currentCTHour() : null;
 
     const hourKeys = Object.keys(byHour)
@@ -220,6 +244,8 @@ exports.handler = async (event) => {
         kpi_hour,
         kpi_note,
         current_hour_floor_idle: current_hour_floor_idle,
+        day_floor_idle_pct,
+        groups_by_day,
         byHour,
         groups_by_hour: groupIdle,
         sparkline_hours: spark,

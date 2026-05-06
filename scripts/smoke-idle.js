@@ -46,7 +46,16 @@ handler({
   .then((r) => {
     console.log('status', r.statusCode);
     const b = JSON.parse(r.body);
-    console.log('date', b.date, 'floor_idle', b.current_hour_floor_idle, 'hours', Object.keys(b.byHour || {}).length);
+    console.log(
+      'date',
+      b.date,
+      'day_floor_idle',
+      b.day_floor_idle_pct,
+      'current_hour_floor_idle',
+      b.current_hour_floor_idle,
+      'hours',
+      Object.keys(b.byHour || {}).length
+    );
   })
   .catch((e) => {
     console.error(e);

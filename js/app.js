@@ -529,32 +529,22 @@ async function loadAll() {
     idleKpi.textContent = '—';
   } else {
     idleErr.hidden = true;
-    const v = idle?.current_hour_floor_idle;
+    const v =
+      idle?.day_floor_idle_pct != null ? idle.day_floor_idle_pct : idle?.current_hour_floor_idle;
     idleKpi.textContent = v != null ? `${v}%` : '—';
     if (idle?.note) {
       idleSub.innerHTML = `<span class="panel-muted">${escapeHtml(idle.note)}</span>`;
     } else {
-      const parts = [`Date ${idle?.date || '—'} (CT)`];
-      if (idle?.ct_current_hour != null) parts.push(`now ${idle.ct_current_hour}:00`);
-      if (
-        idle?.kpi_hour != null &&
-        idle?.ct_current_hour != null &&
-        idle.kpi_hour !== idle.ct_current_hour
-      ) {
-        parts.push(`KPI hour ${idle.kpi_hour}:00`);
-      }
+      const parts = [`Date ${idle?.date || '—'} (CT)`, 'Full day weighted'];
       if (idle?.idle_source_tab) parts.push(`tab ${idle.idle_source_tab}`);
-      idleSub.innerHTML =
-        `<span>${escapeHtml(parts.join(' · '))}</span>` +
-        (idle?.kpi_note ? `<br/><span class="panel-muted">${escapeHtml(idle.kpi_note)}</span>` : '');
+      idleSub.innerHTML = `<span>${escapeHtml(parts.join(' · '))}</span>`;
     }
     renderSparkline(document.getElementById('idle-spark'), idle?.sparkline_hours || []);
-    const gh = idle?.groups_by_hour;
-    const ch = idle?.kpi_hour ?? idle?.ct_current_hour;
-    if (gh && ch != null && gh[String(ch)]) {
-      const entries = Object.entries(gh[String(ch)]).sort((a, b) => (b[1] || 0) - (a[1] || 0));
+    const gd = idle?.groups_by_day;
+    if (gd && Object.keys(gd).length) {
+      const entries = Object.entries(gd).sort((a, b) => (b[1] || 0) - (a[1] || 0));
       idleGroups.innerHTML =
-        `<div class="panel-sub" style="margin-top:10px;">By group (current hour)</div>` +
+        `<div class="panel-sub" style="margin-top:10px;">By group (full day)</div>` +
         `<ul style="margin:8px 0 0 16px;font-size:12px;">${entries.map(([g, p]) => `<li>${escapeHtml(g)}: ${p != null ? p + '%' : '—'}</li>`).join('')}</ul>`;
     } else idleGroups.innerHTML = '';
   }

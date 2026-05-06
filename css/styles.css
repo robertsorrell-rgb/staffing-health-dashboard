@@ -163,6 +163,11 @@ body {
   align-items: start;
 }
 
+/** Single full-width row (e.g. adherence under heatmap, idle below). */
+.panel-grid-fullwidth {
+  grid-template-columns: 1fr;
+}
+
 /**
  * Exceptions: VTO uses ~half the row (column 1); Bobbot + call-out stack in column 2.
  * Tables use minmax(0,…) so wide grids scroll inside the card instead of blowing out layout.
