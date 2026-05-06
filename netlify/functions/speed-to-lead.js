@@ -80,7 +80,16 @@ function resolveSpeedMinutesColumnIndex(headers) {
       /\bqueue\b/.test(h);
     if (timingWord && funnelWord) score += 10;
     if (/\bsla\b/.test(h) && timingWord) score += 8;
-    if ((/_mins?\b|\bmins?_|\bminutes?\b)/.test(h) || /\.minutes?\b/.test(h)) && funnelWord) score += 9;
+    if (
+      funnelWord &&
+      (h.includes('_mins') ||
+        h.includes('_min_') ||
+        h.includes('mins_') ||
+        /\bminutes?\b/.test(h) ||
+        /\.minutes?\b/.test(h))
+    ) {
+      score += 9;
+    }
     if (/\bwait\b/.test(h) && timingWord) score += 6;
     if (score > 0) scored.push({ i, score });
   }
