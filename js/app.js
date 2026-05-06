@@ -685,7 +685,7 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
 
     body += `<section class="vto-scope vto-scope-today vto-split-col" aria-labelledby="vto-head-today">`;
     body += `<h3 class="vto-period-title" id="vto-head-today"><span class="vto-period-label">Today</span></h3>`;
-    body += `<div class="rollup-total"><span class="rollup-total-label">Combined approved VTO hours</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursCombined)} h</strong></div>`;
+    body += `<div class="rollup-total"><span class="rollup-total-label">Approved VTO hours</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursCombined)} h</strong></div>`;
 
     if (typeof rollup.rows_missing_hours === 'number' && rollup.rows_missing_hours > 0) {
       body += `<p class="panel-muted rollup-missing">${rollup.rows_missing_hours} COMMITTED offer row(s) missing hour value.</p>`;
