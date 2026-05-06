@@ -7,6 +7,13 @@
 
 const crypto = require('crypto');
 const { env } = require('./deploy-defaults.js');
+const {
+  SCHEDULE_REST_PATHS,
+  SCHEDULE_GRAPHQL_QUERIES,
+  extractNamedSchedulesFromResponse,
+  graphqlCollectScheduleLikeNodes,
+  assembledGraphqlQuery,
+} = require('./assembled-schedule-probe.js');
 
 /** GET /sites + /queues responses — stable enough to cache and heavy enough to 429 if refreshed often. */
 const assembledMetaCache = new Map();
@@ -122,95 +129,6 @@ const SCHEDULE_RESOLVE_NEG_TTL_MS = 300000;
  * instead — numbers will not match until that schedule’s UUID is sent. We try a few list-style paths
  * (undocumented; vary by account) to resolve a human name → id.
  */
-function scheduleRowId(row) {
-  if (!row || typeof row !== 'object') return '';
-  const id = row.id ?? row.uuid ?? row.schedule_id;
-  return id != null ? String(id).trim() : '';
-}
-
-function scheduleRowName(row) {
-  if (!row || typeof row !== 'object') return '';
-  const nm = row.name ?? row.title ?? row.display_name ?? row.label;
-  return nm != null ? String(nm).trim() : '';
-}
-
-function extractNamedSchedulesFromResponse(payload) {
-  const out = [];
-  const seen = new Set();
-  const addRow = (row) => {
-    const id = scheduleRowId(row);
-    const name = scheduleRowName(row);
-    if (!id || !name || seen.has(id)) return;
-    seen.add(id);
-    out.push({ id, name });
-  };
-  if (!payload || typeof payload !== 'object') return out;
-  const collect = (block) => {
-    if (!block) return;
-    if (Array.isArray(block)) {
-      for (const row of block) {
-        if (row && typeof row === 'object') addRow(row);
-      }
-    } else if (typeof block === 'object') {
-      for (const row of Object.values(block)) {
-        if (row && typeof row === 'object' && !Array.isArray(row)) addRow(row);
-      }
-    }
-  };
-  collect(payload.schedules);
-  collect(payload.schedule_templates);
-  collect(payload.templates);
-  collect(payload.results);
-  collect(payload.items);
-  collect(payload.records);
-  if (Array.isArray(payload.data)) collect(payload.data);
-  if (Array.isArray(payload)) collect(payload);
-  return out;
-}
-
-/** Walk GraphQL `data` for objects that look like `{ id, name | title | … }`. */
-function graphqlCollectScheduleLikeNodes(data) {
-  const out = [];
-  const seen = new Set();
-  const walk = (node, depth) => {
-    if (node == null || depth > 14) return;
-    if (Array.isArray(node)) {
-      for (const x of node) walk(x, depth + 1);
-      return;
-    }
-    if (typeof node === 'object') {
-      const id = scheduleRowId(node);
-      const name = scheduleRowName(node);
-      if (id && name && !seen.has(id)) {
-        seen.add(id);
-        out.push({ id, name });
-      }
-      for (const v of Object.values(node)) walk(v, depth + 1);
-    }
-  };
-  walk(data, 0);
-  return out;
-}
-
-async function assembledGraphqlQuery(apiBase, apiKey, query) {
-  const auth = Buffer.from(`${apiKey}:`, 'utf8').toString('base64');
-  const url = `${apiBase}/graphql`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${auth}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ query }),
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    const err = new Error(`Assembled /graphql ${res.status}: ${text.slice(0, 240)}`);
-    err.statusCode = res.status === 401 || res.status === 403 ? 503 : 502;
-    throw err;
-  }
-  return text ? JSON.parse(text) : {};
-}
 
 /**
  * When `ASSEMBLED_SCHEDULE_AUTORESOLVE_OFF` is not set, we try to match this name (default “Default Schedule”).
@@ -243,15 +161,7 @@ async function resolveScheduleIdByName(apiBase, apiKey, matchName) {
   }
 
   const lower = matchName.toLowerCase();
-  const paths = [
-    '/schedules',
-    '/schedule_templates',
-    '/schedule_template',
-    '/schedule_templates/all',
-    '/staffing/schedules',
-    '/company/schedules',
-  ];
-  for (const path of paths) {
+  for (const path of SCHEDULE_REST_PATHS) {
     try {
       const res = await assembledFetch(apiBase, apiKey, path, {});
       const candidates = extractNamedSchedulesFromResponse(res);
@@ -270,14 +180,7 @@ async function resolveScheduleIdByName(apiBase, apiKey, matchName) {
 
   const gqlOff = ['1', 'true', 'yes'].includes(String(env('ASSEMBLED_SCHEDULE_GRAPHQL_OFF') || '').trim().toLowerCase());
   if (!gqlOff) {
-    const gqlQueries = [
-      'query { schedules { id name } }',
-      'query { schedule_templates { id name } }',
-      'query { scheduleTemplates { id name } }',
-      'query { staffing_schedules { id name } }',
-      'query { company { schedules { id name } } }',
-    ];
-    for (const query of gqlQueries) {
+    for (const query of SCHEDULE_GRAPHQL_QUERIES) {
       try {
         const json = await assembledGraphqlQuery(apiBase, apiKey, query);
         if (json.errors && json.errors.length) continue;
@@ -871,7 +774,7 @@ async function loadNetStaffingFromAssembled() {
       );
     } else if (scheduleSource === 'resolve_failed' && scheduleAutoName) {
       parts.push(
-        `Could not resolve schedule “${scheduleAutoName}” automatically (REST list paths + /graphql probes). Set **ASSEMBLED_SCHEDULE_ID** in Netlify to that schedule’s UUID (Assembled → Staffing timeline with that schedule selected → DevTools → Network: search responses or query params for \`schedule\`). Until then the API defaults to **master schedule** — nets differ from a “Default Schedule” timeline.`
+        `Could not resolve schedule “${scheduleAutoName}” automatically (this API key/account does not expose schedule lists). Set **ASSEMBLED_SCHEDULE_ID** in Netlify: run locally **npm run assembled:list-schedules** (prints UUIDs if any probe works), or Chrome DevTools → Network on Staffing timeline while that schedule is selected and search for \`schedule\`. Until then Assembled defaults to **master schedule** — nets differ from “Default Schedule”.`
       );
     } else {
       parts.push(
