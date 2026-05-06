@@ -1,12 +1,11 @@
 'use strict';
 
 /**
- * Net staffing from Assembled (people-style `staffing_net` per interval).
+ * Net staffing from Assembled (`GET /forecasted_vs_actuals`), rolled up to hourly people deltas.
  * Uses Assembled’s HTTP resource `/forecasted_vs_actuals` (their name — payload includes staffing metrics).
  */
 
 const crypto = require('crypto');
-const { parseHourHeader } = require('./hour-headers.js');
 const { env } = require('./deploy-defaults.js');
 
 /** GET /sites + /queues responses — stable enough to cache and heavy enough to 429 if refreshed often. */
@@ -198,8 +197,20 @@ function resolveQueueIds(res, queueNames) {
   return out;
 }
 
-/** Assembled sometimes returns epoch ms; normalize to Unix seconds. */
+/** Assembled usually returns Unix seconds; sometimes ms or ISO strings — normalize to Unix seconds. */
 function intervalStartToUnixSec(t) {
+  if (t == null || t === '') return null;
+  if (typeof t === 'string') {
+    const trimmed = t.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n)) return null;
+      return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+    }
+    const ms = Date.parse(trimmed);
+    if (Number.isFinite(ms)) return Math.floor(ms / 1000);
+    return null;
+  }
   const n = Number(t);
   if (!Number.isFinite(n)) return null;
   if (n > 1e12) return Math.floor(n / 1000);
@@ -264,10 +275,13 @@ function parseNonNegMinute(name, fallback) {
  * api | sched_minus_actual | sched_minus_forecasted
  */
 function netComputeMode() {
-  const m = (env('ASSEMBLED_NET_COMPUTE') || 'api').trim().toLowerCase().replace(/-/g, '_');
-  if (m === 'sched_minus_actual' || m === 'scheduled_minus_actual') return 'sched_minus_actual';
-  if (m === 'sched_minus_forecasted' || m === 'scheduled_minus_forecasted') return 'sched_minus_forecasted';
-  return 'api';
+  /** Default matches Staffing timeline (scheduled − required.actual); `api` uses Assembled’s staffing_net field. */
+  let m = (env('ASSEMBLED_NET_COMPUTE') || 'sched_minus_actual').trim().toLowerCase().replace(/-/g, '_');
+  if (m === 'scheduled_minus_actual') m = 'sched_minus_actual';
+  if (m === 'scheduled_minus_forecasted') m = 'sched_minus_forecasted';
+  if (m === 'api' || m === 'assembled') return 'api';
+  if (m === 'sched_minus_forecasted') return 'sched_minus_forecasted';
+  return 'sched_minus_actual';
 }
 
 /** One interval’s net staffing (people-style), before hourly rollup. */
@@ -296,7 +310,7 @@ function intervalNetStaffing(it, mode) {
   return scheduled - reqFallback;
 }
 
-/** CT hour 0–23 for interval start */
+/** Chicago wall-clock hour (0–23) and minute for interval start — bucket key for hourly rollup. */
 function hourFromUnix(sec) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: TZ,
@@ -308,12 +322,12 @@ function hourFromUnix(sec) {
   }).formatToParts(new Date(sec * 1000));
   const H = {};
   for (const p of parts) if (p.type !== 'literal') H[p.type] = p.value;
-  const hh = parseInt(H.hour, 10);
-  const mm = parseInt(H.minute, 10);
-  const slotTry = `${hh}:${String(mm).padStart(2, '0')}`;
-  let hr = parseHourHeader(slotTry);
-  if (hr == null) hr = hh;
-  return { hr, minute: mm };
+  let hh = parseInt(H.hour, 10);
+  let mm = parseInt(H.minute, 10);
+  if (!Number.isFinite(hh)) hh = 0;
+  if (!Number.isFinite(mm)) mm = 0;
+  if (hh === 24) hh = 0;
+  return { hr: hh, minute: mm };
 }
 
 /**
@@ -423,20 +437,32 @@ async function pullForecastBuckets({
 }
 
 function matrixHoursFromBuckets(buckets, capMap, rollup) {
-  buckets[AGGREGATE_LABEL] = {};
   const aggregateLabels = capMap.map((q) => q.label);
   const hourSetAgg = new Set();
   for (const lbl of aggregateLabels) {
     for (const hr of Object.keys(buckets[lbl] || {})) hourSetAgg.add(parseInt(hr, 10));
   }
+
+  /** One decimal place per queue hour — Aggregate = sum of those cells (matches “sum of rows” in the UI). */
+  const roundedQueueByHour = {};
+  for (const lbl of aggregateLabels) {
+    roundedQueueByHour[lbl] = {};
+    for (const hr of hourSetAgg) {
+      const cell = buckets[lbl] && buckets[lbl][hr];
+      const v = resolvedHourNet(cell, rollup);
+      if (v == null || !Number.isFinite(v)) continue;
+      roundedQueueByHour[lbl][hr] = Math.round(v * 10) / 10;
+    }
+  }
+
+  buckets[AGGREGATE_LABEL] = {};
   for (const hr of hourSetAgg) {
     let sumAgg = 0;
     let parts = 0;
     for (const lbl of aggregateLabels) {
-      const cell = buckets[lbl][hr];
-      const v = resolvedHourNet(cell, rollup);
-      if (v == null || !Number.isFinite(v)) continue;
-      sumAgg += v;
+      const rv = roundedQueueByHour[lbl][hr];
+      if (rv == null || !Number.isFinite(rv)) continue;
+      sumAgg += rv;
       parts += 1;
     }
     if (parts > 0) buckets[AGGREGATE_LABEL][hr] = { sum: sumAgg };
@@ -454,12 +480,12 @@ function matrixHoursFromBuckets(buckets, capMap, rollup) {
   for (const label of groupOrder) {
     const hoursOut = {};
     for (const hr of hours) {
-      const cell = buckets[label] && buckets[label][hr];
       let v;
       if (label === AGGREGATE_LABEL) {
+        const cell = buckets[label] && buckets[label][hr];
         v = cell && Number.isFinite(cell.sum) ? cell.sum : null;
       } else {
-        v = resolvedHourNet(cell, rollup);
+        v = roundedQueueByHour[label] && roundedQueueByHour[label][hr];
       }
       if (v == null || !Number.isFinite(v)) continue;
       hoursOut[String(hr)] = Math.round(v * 10) / 10;
