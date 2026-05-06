@@ -201,6 +201,55 @@ function formatSparklineHour12(h) {
   return `${n - 12} PM`;
 }
 
+/** RGB stops for idle sparkline: low % cool → amber → orange → red (continuous heat ramp). */
+const IDLE_SPARK_RGB = {
+  cool: [59, 143, 196],
+  mild: [105, 168, 138],
+  warn: [201, 162, 39],
+  hot: [232, 148, 61],
+  bad: [201, 48, 48],
+  worse: [145, 28, 34],
+};
+
+function lerpChannel(a, b, t) {
+  return a + (b - a) * Math.min(1, Math.max(0, t));
+}
+
+function rgbFloatToHex(r, g, b) {
+  return (
+    '#' +
+    [r, g, b]
+      .map((x) =>
+        Math.max(0, Math.min(255, Math.round(x)))
+          .toString(16)
+          .padStart(2, '0')
+      )
+      .join('')
+  );
+}
+
+function lerpRgbTriple(c1, c2, t) {
+  const u = Math.min(1, Math.max(0, t));
+  return [
+    lerpChannel(c1[0], c2[0], u),
+    lerpChannel(c1[1], c2[1], u),
+    lerpChannel(c1[2], c2[2], u),
+  ];
+}
+
+/** Idle % (0–100) → hex stroke color; aligns loosely with 30/40/50 band semantics. */
+function idleSparkColorHex(pct) {
+  const p = Math.min(100, Math.max(0, Number(pct) || 0));
+  const { cool, mild, warn, hot, bad, worse } = IDLE_SPARK_RGB;
+  let rgb;
+  if (p < 15) rgb = lerpRgbTriple(cool, mild, p / 15);
+  else if (p < 30) rgb = lerpRgbTriple(mild, warn, (p - 15) / 15);
+  else if (p < 40) rgb = lerpRgbTriple(warn, hot, (p - 30) / 10);
+  else if (p < 50) rgb = lerpRgbTriple(hot, bad, (p - 40) / 10);
+  else rgb = lerpRgbTriple(bad, worse, Math.min(1, (p - 50) / 40));
+  return rgbFloatToHex(rgb[0], rgb[1], rgb[2]);
+}
+
 /** Which hours get a tick + label under the idle sparkline (start/end always included). */
 function pickSparklineHourTicks(minH, maxH) {
   const lo = Math.min(minH, maxH);
@@ -262,6 +311,44 @@ function renderSparkline(container, spark) {
   const axisY = padTop + chartH;
   const tickHours = hoursPresent.length ? pickSparklineHourTicks(minH, maxH) : [];
 
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  svg.appendChild(defs);
+
+  /** @type {{ x: number; y: number; v: number }[]} */
+  const pts = [];
+  spark.forEach((s, i) => {
+    const v = s.idle_pct;
+    if (v == null) return;
+    const hour = s.hour != null && Number.isFinite(Number(s.hour)) ? Number(s.hour) : null;
+    const x = hour != null ? xPos(hour) : xPos(null, i);
+    const y = yAt(v);
+    pts.push({ x, y, v: Number(v) });
+  });
+
+  if (pts.length >= 2) {
+    for (let si = 0; si < pts.length - 1; si++) {
+      const a = pts[si];
+      const b = pts[si + 1];
+      const gid = `idle-spark-seg-${si}`;
+      const lg = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+      lg.setAttribute('id', gid);
+      lg.setAttribute('gradientUnits', 'userSpaceOnUse');
+      lg.setAttribute('x1', String(a.x));
+      lg.setAttribute('y1', String(a.y));
+      lg.setAttribute('x2', String(b.x));
+      lg.setAttribute('y2', String(b.y));
+      const stop0 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+      stop0.setAttribute('offset', '0%');
+      stop0.setAttribute('stop-color', idleSparkColorHex(a.v));
+      const stop1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+      stop1.setAttribute('offset', '100%');
+      stop1.setAttribute('stop-color', idleSparkColorHex(b.v));
+      lg.appendChild(stop0);
+      lg.appendChild(stop1);
+      defs.appendChild(lg);
+    }
+  }
+
   const yPctTicks = [100, 50, 0];
   for (const p of yPctTicks) {
     const y = yAtPct(p);
@@ -292,28 +379,31 @@ function renderSparkline(container, spark) {
     svg.appendChild(grid);
   }
 
-  let d = '';
-  let penUp = true;
-  spark.forEach((s, i) => {
-    const v = s.idle_pct;
-    if (v == null) {
-      penUp = true;
-      return;
+  const strokeW = 2.35;
+  if (pts.length >= 2) {
+    for (let si = 0; si < pts.length - 1; si++) {
+      const a = pts[si];
+      const b = pts[si + 1];
+      const seg = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      seg.setAttribute('x1', String(a.x));
+      seg.setAttribute('y1', String(a.y));
+      seg.setAttribute('x2', String(b.x));
+      seg.setAttribute('y2', String(b.y));
+      seg.setAttribute('stroke', `url(#idle-spark-seg-${si})`);
+      seg.setAttribute('stroke-width', String(strokeW));
+      seg.setAttribute('stroke-linecap', 'round');
+      svg.appendChild(seg);
     }
-    const hour = s.hour != null && Number.isFinite(Number(s.hour)) ? Number(s.hour) : null;
-    const x = hour != null ? xPos(hour) : xPos(null, i);
-    const y = yAt(v);
-    d += `${penUp ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)} `;
-    penUp = false;
-  });
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', d.trim());
-  path.setAttribute('fill', 'none');
-  path.setAttribute('stroke', 'var(--sky)');
-  path.setAttribute('stroke-width', '2.25');
-  path.setAttribute('stroke-linecap', 'round');
-  path.setAttribute('stroke-linejoin', 'round');
-  svg.appendChild(path);
+  } else if (pts.length === 1) {
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', String(pts[0].x));
+    dot.setAttribute('cy', String(pts[0].y));
+    dot.setAttribute('r', '3.25');
+    dot.setAttribute('fill', idleSparkColorHex(pts[0].v));
+    dot.setAttribute('stroke', '#fff');
+    dot.setAttribute('stroke-width', '0.75');
+    svg.appendChild(dot);
+  }
 
   for (const th of tickHours) {
     const x = xPos(th);
@@ -338,8 +428,8 @@ function renderSparkline(container, spark) {
   svg.setAttribute(
     'aria-label',
     hoursPresent.length
-      ? `Idle percent from ${formatSparklineHour12(lo)} to ${formatSparklineHour12(hi)} Central`
-      : 'Idle percent trend'
+      ? `Idle percent from ${formatSparklineHour12(lo)} to ${formatSparklineHour12(hi)} Central; line color maps cool to warm by percentage`
+      : 'Idle percent trend; line color maps cool to warm by percentage'
   );
 
   container.appendChild(svg);
