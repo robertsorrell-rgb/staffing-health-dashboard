@@ -5,7 +5,7 @@ const { readSheetFilterToday, readSheetFilterWeek } = require('./lib/filter-toda
 const { rollupTargetedOffers } = require('./lib/targeted-vto-rollup.js');
 const { rollupAutoVtoApproved } = require('./lib/auto-vto-approved-rollup.js');
 const { applyCanonicalToAutomatedRollup, canonicalVtoSalesGroup } = require('./lib/vto-canonical-sales-group.js');
-const { todayCTDateStr, currentChicagoWeekSundayToSaturday } = require('./lib/ct.js');
+const { todayCTDateStr, yesterdayCTDateStr, currentChicagoWeekSundayToSaturday } = require('./lib/ct.js');
 const { env } = require('./lib/deploy-defaults.js');
 
 const CACHE_SEC = parseInt(env('TARGETED_VTO_CACHE_SECONDS'), 10);
@@ -152,6 +152,67 @@ exports.handler = async (event) => {
 
   const combinedWeekByGroup = mergeByGroup(rollupWeek.by_queue || [], autoWeek.by_role || []);
 
+  const yesterdayYmd = yesterdayCTDateStr();
+  let rollupYesterday = emptyTargetedRollup();
+  let targetedRowsYesterday = 0;
+  let targetedYesterdayError = null;
+  let autoYesterday = emptyAutoRollup();
+  let autoRowsYesterday = 0;
+  let autoYesterdayDateColumnUsed = null;
+  let autoYesterdayError = null;
+
+  if (targetedSpreadsheetId) {
+    try {
+      const ry = await readSheetFilterToday(targetedSpreadsheetId, offersTab, 'A1:ZZ20000', {
+        preferDateHeaders: ['Date', 'date'],
+        filterDateYmd: yesterdayYmd,
+      });
+      targetedRowsYesterday = ry.rowsToday.length;
+      rollupYesterday =
+        ry.headers.length && ry.rowsToday.length
+          ? rollupTargetedOffers(ry.rowsToday, ry.headers)
+          : emptyTargetedRollup();
+    } catch (err) {
+      targetedYesterdayError = err.message || String(err);
+      rollupYesterday = emptyTargetedRollup();
+    }
+  }
+
+  if (autoSpreadsheetId) {
+    try {
+      const byReqY = await readSheetFilterToday(autoSpreadsheetId, autoTab, 'A1:ZZ20000', {
+        preferDateHeaders: ['Date Requested', 'date requested', 'Timestamp', 'timestamp'],
+        filterDateYmd: yesterdayYmd,
+      });
+      let activeY = byReqY;
+      if ((byReqY.rowsToday || []).length === 0) {
+        const byTsY = await readSheetFilterToday(autoSpreadsheetId, autoTab, 'A1:ZZ20000', {
+          preferDateHeaders: ['Timestamp', 'timestamp', 'Date Requested', 'date requested'],
+          filterDateYmd: yesterdayYmd,
+        });
+        if ((byTsY.rowsToday || []).length > (byReqY.rowsToday || []).length) {
+          activeY = byTsY;
+        }
+      }
+      autoRowsYesterday = (activeY.rowsToday || []).length;
+      autoYesterdayDateColumnUsed = activeY.headers?.[activeY.dateCol] || null;
+      autoYesterday =
+        activeY.headers && activeY.headers.length
+          ? applyCanonicalToAutomatedRollup(
+              rollupAutoVtoApproved(activeY.rowsToday || [], activeY.headers)
+            )
+          : emptyAutoRollup();
+    } catch (err) {
+      autoYesterdayError = err.message || String(err);
+      autoYesterday = emptyAutoRollup();
+    }
+  }
+
+  const targetedYesterdayHours = Number(rollupYesterday.total_hours) || 0;
+  const autoYesterdayHours = Number(autoYesterday.hours_approved_today) || 0;
+  const combinedYesterdayHours = Math.round((targetedYesterdayHours + autoYesterdayHours) * 100) / 100;
+  const combinedYesterdayByGroup = mergeByGroup(rollupYesterday.by_queue || [], autoYesterday.by_role || []);
+
   return ok(
     {
       configured: true,
@@ -169,6 +230,12 @@ exports.handler = async (event) => {
         approved_auto_today: auto.approved_today,
         hours_auto_approved: auto.hours_approved_today,
         hours_combined_approved: combinedHours,
+        yesterday_date: yesterdayYmd,
+        rows_targeted_offers_yesterday: targetedRowsYesterday,
+        hours_targeted_from_offers_yesterday: targetedYesterdayHours,
+        rows_auto_yesterday: autoRowsYesterday,
+        hours_auto_approved_yesterday: autoYesterdayHours,
+        hours_combined_approved_yesterday: combinedYesterdayHours,
       },
       rollup,
       automated_rollup: auto,
@@ -184,6 +251,14 @@ exports.handler = async (event) => {
         auto_date_column_used: autoWeekDateColumnUsed,
         targeted_fetch_error: weekTargetedError,
         auto_fetch_error: weekAutoError,
+      },
+      combined_yesterday: {
+        date: yesterdayYmd,
+        hours_approved: combinedYesterdayHours,
+        by_group: combinedYesterdayByGroup,
+        targeted_fetch_error: targetedYesterdayError,
+        auto_fetch_error: autoYesterdayError,
+        auto_date_column_used: autoYesterdayDateColumnUsed,
       },
       fetched_at: new Date().toISOString(),
     },

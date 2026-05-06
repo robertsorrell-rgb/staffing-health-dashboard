@@ -930,6 +930,7 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
   const rollup = data.rollup || {};
   const auto = data.automated_rollup || {};
   const combined = data.combined || {};
+  const combinedYesterday = data.combined_yesterday || {};
   const combinedWeek = data.combined_week || {};
   const sum = data.summary || {};
   const autoSummary = autoPanel.summary || {};
@@ -941,6 +942,17 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     sum.hours_combined_approved ??
     combined.hours_approved ??
     Math.round((Number(hoursTargeted || 0) + Number(hoursAuto || 0)) * 100) / 100;
+
+  let hoursYesterdayResolved =
+    sum.hours_combined_approved_yesterday ?? combinedYesterday.hours_approved ?? null;
+  if (hoursYesterdayResolved == null || Number.isNaN(Number(hoursYesterdayResolved))) {
+    const hy =
+      (Number(sum.hours_targeted_from_offers_yesterday) || 0) +
+      (Number(sum.hours_auto_approved_yesterday) || 0);
+    hoursYesterdayResolved = Math.round(hy * 100) / 100;
+  } else {
+    hoursYesterdayResolved = Math.round(Number(hoursYesterdayResolved) * 100) / 100;
+  }
 
   let body = '';
   if (!errMsg && data.configured !== false) {
@@ -955,6 +967,20 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     }
 
     body += `<div class="vto-split">`;
+
+    body += `<section class="vto-scope vto-scope-yesterday vto-split-col" aria-labelledby="vto-head-yesterday">`;
+    const yDay = combinedYesterday.date || sum.yesterday_date || '';
+    const yMetaLine = yDay ? `${fmtOtWarnDayCt(yDay)} · CT` : 'Prior calendar day (CT)';
+    body += `<h3 class="vto-period-title" id="vto-head-yesterday"><span class="vto-period-label">Yesterday</span><span class="vto-period-meta">${escapeHtml(yMetaLine)}</span></h3>`;
+    if (combinedYesterday.targeted_fetch_error) {
+      body += `<p class="panel-error">Offers tab (yesterday): ${escapeHtml(combinedYesterday.targeted_fetch_error)}</p>`;
+    }
+    if (combinedYesterday.auto_fetch_error) {
+      body += `<p class="panel-error">Requests_Submissions tab (yesterday): ${escapeHtml(combinedYesterday.auto_fetch_error)}</p>`;
+    }
+    body += `<div class="rollup-total"><span class="rollup-total-label">Approved VTO hours</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursYesterdayResolved)} h</strong></div>`;
+    body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combinedYesterday.by_group || []), 'By sales group');
+    body += `</section>`;
 
     body += `<section class="vto-scope vto-scope-today vto-split-col" aria-labelledby="vto-head-today">`;
     body += `<h3 class="vto-period-title" id="vto-head-today"><span class="vto-period-label">Today</span></h3>`;
@@ -1718,6 +1744,9 @@ function generateLocalDailyBrief(context, meta) {
         `Approved VTO (targeted + automated) rounds to about ${x.approvedVtoHoursTodayCeil} h today.`
       );
     }
+    if (x.approvedVtoHoursYesterdayCeil != null && x.approvedVtoHoursYesterdayCeil > 0) {
+      vParts.push(`Yesterday approved VTO was about ${x.approvedVtoHoursYesterdayCeil} h (combined).`);
+    }
     const vg = (x.vtoTopGroupsToday || []).slice(0, 4);
     if (vg.length) {
       vParts.push(
@@ -2026,7 +2055,19 @@ function buildDashboardBriefContext(results, errors) {
       group: r.group,
       totalHoursCeil: Math.ceil((Number(r.targeted_hours) || 0) + (Number(r.automated_hours) || 0)),
     }));
-    const fe = [tv.targeted_fetch_error, tv.auto_fetch_error].filter(Boolean);
+    const cy = tv.combined_yesterday || {};
+    const rawY =
+      sum.hours_combined_approved_yesterday ??
+      cy.hours_approved ??
+      (Number(sum.hours_targeted_from_offers_yesterday) || 0) +
+        (Number(sum.hours_auto_approved_yesterday) || 0);
+    ctx.vtoPtoCalloutOt.approvedVtoHoursYesterdayCeil = Math.ceil(Number(rawY) || 0);
+    const fe = [
+      tv.targeted_fetch_error,
+      tv.auto_fetch_error,
+      cy.targeted_fetch_error,
+      cy.auto_fetch_error,
+    ].filter(Boolean);
     if (fe.length) ctx.vtoPtoCalloutOt.vtoFetchErrors = fe;
   }
 

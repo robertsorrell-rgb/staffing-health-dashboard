@@ -260,6 +260,7 @@ The parser finds the **AGENT DRILL-DOWN** table header row whose columns include
 
 - **`summary.hours_combined_approved`** = targeted approved hours + automated approved hours.
 - **`combined.by_group`** merges Targeted queue + Automated role (case-insensitive normalized key).
+- **`combined_yesterday`** — same merge for the **prior Chicago calendar day** (`summary.yesterday_date`): **`hours_approved`**, **`by_group`**, plus optional **`targeted_fetch_error`** / **`auto_fetch_error`** for yesterday-only reads.
 ---
 
 ## VTO Request Processor — Requests_Submissions (automated)

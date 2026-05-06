@@ -5,6 +5,18 @@ function todayCTDateStr() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
 }
 
+/** Previous calendar day (Gregorian) vs Chicago “today” — matches Offers / Requests date columns. */
+function yesterdayCTDateStr() {
+  const today = todayCTDateStr();
+  const [y, m, d] = today.split('-').map((x) => parseInt(x, 10));
+  const jd = new Date(Date.UTC(y, m - 1, d));
+  jd.setUTCDate(jd.getUTCDate() - 1);
+  const y2 = jd.getUTCFullYear();
+  const m2 = jd.getUTCMonth() + 1;
+  const d2 = jd.getUTCDate();
+  return `${y2}-${String(m2).padStart(2, '0')}-${String(d2).padStart(2, '0')}`;
+}
+
 /** Current hour 0–23 in America/Chicago */
 function currentCTHour() {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -67,6 +79,7 @@ function chicagoHourMinute(d = new Date()) {
 
 module.exports = {
   todayCTDateStr,
+  yesterdayCTDateStr,
   currentCTHour,
   currentChicagoWeekSundayToSaturday,
   chicagoHourMinute,

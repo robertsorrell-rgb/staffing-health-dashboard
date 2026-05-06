@@ -67,10 +67,17 @@ function resolvePrimaryDateColumn(headers, prefers) {
 }
 
 /**
- * Reads a tab; uses row 1 as headers; filters body rows whose date column matches today CT.
- * @param {{ preferDateHeaders?: string[], matchAnyRequestDateColumn?: boolean, fixedDateColumnIndex?: number, bobbotRequestDateMatch?: boolean }} [opts] — If `bobbotRequestDateMatch`, OR every `request_date` header column; if none found, use column **F** (index 5). Otherwise see `fixedDateColumnIndex` / `matchAnyRequestDateColumn`.
+ * Reads a tab; uses row 1 as headers; filters body rows whose date column matches today CT (or **`opts.filterDateYmd`** when set, same `YYYY-MM-DD` semantics).
+ * @param {{ preferDateHeaders?: string[], matchAnyRequestDateColumn?: boolean, fixedDateColumnIndex?: number, bobbotRequestDateMatch?: boolean, filterDateYmd?: string }} [opts] — If `bobbotRequestDateMatch`, OR every `request_date` header column; if none found, use column **F** (index 5). Otherwise see `fixedDateColumnIndex` / `matchAnyRequestDateColumn`.
  */
 async function readSheetFilterToday(spreadsheetId, tab, a1Suffix = 'A1:Z10000', opts = {}) {
+  const calendarToday = todayCTDateStr();
+  let filterYmd = calendarToday;
+  if (opts.filterDateYmd != null && String(opts.filterDateYmd).trim()) {
+    const cand = String(opts.filterDateYmd).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(cand)) filterYmd = cand;
+  }
+
   const t = (tab || 'Sheet1').replace(/'/g, "''");
   const range = `'${t}'!${a1Suffix}`;
   const values = await getSheetValues(spreadsheetId, range, {
@@ -83,7 +90,8 @@ async function readSheetFilterToday(spreadsheetId, tab, a1Suffix = 'A1:Z10000', 
       rowsToday: [],
       rowsAll: [],
       dateCol: 0,
-      today: todayCTDateStr(),
+      today: calendarToday,
+      filter_date: filterYmd,
       dateHeader: '',
     };
   }
@@ -115,14 +123,13 @@ async function readSheetFilterToday(spreadsheetId, tab, a1Suffix = 'A1:Z10000', 
       multiIdx.length > 0 ? multiIdx : [resolvePrimaryDateColumn(headers, prefers)];
   }
 
-  const today = todayCTDateStr();
   const body = values.slice(1);
   const hl = headers.length;
   const rowsToday = [];
 
   for (const row of body) {
     const full = padRowToHeaders(row, hl);
-    const hitsToday = dateColsForMatch.some((ci) => normalizeDateCell(full[ci]) === today);
+    const hitsToday = dateColsForMatch.some((ci) => normalizeDateCell(full[ci]) === filterYmd);
     if (hitsToday) rowsToday.push(full);
   }
 
@@ -152,7 +159,15 @@ async function readSheetFilterToday(spreadsheetId, tab, a1Suffix = 'A1:Z10000', 
     dateHeader = dc >= 0 && dc < headers.length ? String(headers[dc] || '').trim() : '';
   }
 
-  return { headers, rowsToday, rowsAll: body, dateCol: dateColsForMatch[0], today, dateHeader };
+  return {
+    headers,
+    rowsToday,
+    rowsAll: body,
+    dateCol: dateColsForMatch[0],
+    today: calendarToday,
+    filter_date: filterYmd,
+    dateHeader,
+  };
 }
 
 /**
