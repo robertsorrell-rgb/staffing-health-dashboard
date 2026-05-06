@@ -270,16 +270,14 @@ function parseNonNegMinute(name, fallback) {
 }
 
 /**
- * Which field drives “net” per 30‑min interval (Staffing timeline may match scheduled − actual requirement,
- * while the API’s staffing_net can differ).
- * api | sched_minus_actual | sched_minus_forecasted
+ * Which field drives “net” per 30‑min interval.
+ * Default `api` matches **Targeted VTO bot** (`rvtoFindDeficits_`): numeric staffing_net, else scheduled − staffing_required.forecasted only.
  */
 function netComputeMode() {
-  /** Default matches Staffing timeline (scheduled − required.actual); `api` uses Assembled’s staffing_net field. */
-  let m = (env('ASSEMBLED_NET_COMPUTE') || 'sched_minus_actual').trim().toLowerCase().replace(/-/g, '_');
+  let m = (env('ASSEMBLED_NET_COMPUTE') || 'api').trim().toLowerCase().replace(/-/g, '_');
   if (m === 'scheduled_minus_actual') m = 'sched_minus_actual';
   if (m === 'scheduled_minus_forecasted') m = 'sched_minus_forecasted';
-  if (m === 'api' || m === 'assembled') return 'api';
+  if (m === 'api' || m === 'assembled' || m === 'vto_bot') return 'api';
   if (m === 'sched_minus_forecasted') return 'sched_minus_forecasted';
   return 'sched_minus_actual';
 }
@@ -301,13 +299,13 @@ function intervalNetStaffing(it, mode) {
     return scheduled - forecasted;
   }
 
+  /** `api` / VTO bot: staffing_net if numeric, else scheduled − forecasted (not actual — matches Apps Script bot). */
   if (it.staffing_net != null && it.staffing_net !== '') {
     const n = Number(it.staffing_net);
     if (Number.isFinite(n)) return n;
   }
-  const reqFallback = Number.isFinite(forecasted) ? forecasted : actual;
-  if (!Number.isFinite(reqFallback)) return NaN;
-  return scheduled - reqFallback;
+  if (!Number.isFinite(forecasted)) return NaN;
+  return scheduled - forecasted;
 }
 
 /** Chicago wall-clock hour (0–23) and minute for interval start — bucket key for hourly rollup. */
@@ -613,12 +611,19 @@ async function loadNetStaffingFromAssembled() {
         'WARNING: Net staffing used queue + channel only (ASSEMBLED_ALLOW_NO_SITE_RETRY) — mixed all sites; compare only if timeline has no site filter.'
       );
     }
-    if (netMode !== 'api' || scheduleId) {
+    if (scheduleId) {
+      parts.push('schedule_id filter active — match the same schedule in Staffing timeline.');
+    }
+    if (netMode === 'api') {
       parts.push(
-        `Net compute: ${netMode}${scheduleId ? ' · schedule_id set' : ''}. Compare to Staffing timeline with the same filters.`
+        'Net = staffing_net when present, else scheduled − staffing_required.forecasted (Targeted VTO bot). Aggregate row sums the five queue nets — not “scheduled + required”.'
+      );
+    } else {
+      parts.push(
+        `Net compute: ${netMode}. For bot/timeline parity with staffing_net / forecasted requirement, use ASSEMBLED_NET_COMPUTE=api (or vto_bot).`
       );
     }
-    if (parts.length) assembledNoteOk = parts.join(' ');
+    assembledNoteOk = parts.join(' ');
   }
 
   return {
