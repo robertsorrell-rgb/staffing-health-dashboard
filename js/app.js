@@ -78,6 +78,16 @@ function sortedIdleGroupEntries(rawMap) {
   return Object.entries(merged).sort((a, b) => (b[1] || 0) - (a[1] || 0));
 }
 
+/** Idle emphasis: ≥30% yellow, ≥40% orange, ≥50% red (strongest band wins). */
+function idlePctBandClassForValue(p) {
+  if (p == null || p === '' || Number.isNaN(Number(p))) return '';
+  const n = Number(p);
+  if (n >= 50) return 'idle-pct-red';
+  if (n >= 40) return 'idle-pct-orange';
+  if (n >= 30) return 'idle-pct-yellow';
+  return '';
+}
+
 function formatTime(iso) {
   if (!iso) return '—';
   try {
@@ -697,9 +707,16 @@ async function loadAll() {
 
   function idleGroupListHtml(entries, heading) {
     if (!entries.length) return '';
+    const lis = entries
+      .map(([g, p]) => {
+        const band = idlePctBandClassForValue(p);
+        const cls = band ? ` class="${band}"` : '';
+        return `<li${cls}>${escapeHtml(g)}: ${p != null ? p + '%' : '—'}</li>`;
+      })
+      .join('');
     return (
       `<div class="panel-sub" style="margin-top:10px;">${escapeHtml(heading)}</div>` +
-      `<ul style="margin:8px 0 0 16px;font-size:12px;">${entries.map(([g, p]) => `<li>${escapeHtml(g)}: ${p != null ? p + '%' : '—'}</li>`).join('')}</ul>`
+      `<ul class="idle-group-list">${lis}</ul>`
     );
   }
 
@@ -709,8 +726,10 @@ async function loadAll() {
     idleParseNote.hidden = true;
     idleSplit.hidden = false;
     idleHourKpi.textContent = '—';
+    idleHourKpi.className = 'panel-kpi idle-split-kpi';
     idleHourGroups.innerHTML = '';
     idleDayKpi.textContent = '—';
+    idleDayKpi.className = 'panel-kpi idle-split-kpi';
     idleDayGroups.innerHTML = '';
   } else {
     idleErr.hidden = true;
@@ -726,6 +745,9 @@ async function loadAll() {
 
       const hv = idle?.current_hour_floor_idle;
       idleHourKpi.textContent = hv != null ? `${hv}%` : '—';
+      idleHourKpi.className = ['panel-kpi', 'idle-split-kpi', idlePctBandClassForValue(hv)]
+        .filter(Boolean)
+        .join(' ');
 
       const gh = idle?.groups_by_hour;
       const ch = idle?.kpi_hour ?? idle?.ct_current_hour;
@@ -736,6 +758,9 @@ async function loadAll() {
 
       const dv = idle?.day_floor_idle_pct;
       idleDayKpi.textContent = dv != null ? `${dv}%` : '—';
+      idleDayKpi.className = ['panel-kpi', 'idle-split-kpi', idlePctBandClassForValue(dv)]
+        .filter(Boolean)
+        .join(' ');
 
       const gd = idle?.groups_by_day;
       if (gd && Object.keys(gd).length) {

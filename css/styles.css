@@ -18,6 +18,8 @@
   --red-bg: #fceaea;
   --amber: #c9a227;
   --amber-bg: #fdf6dd;
+  --idle-orange-bg: #ffe8cc;
+  --idle-orange-fg: #6b3f12;
   --shadow-sm: 0 1px 3px rgba(14, 27, 46, 0.08), 0 1px 2px rgba(14, 27, 46, 0.05);
   --shadow-md: 0 4px 12px rgba(14, 27, 46, 0.1), 0 2px 6px rgba(14, 27, 46, 0.06);
   --radius: 6px;
@@ -220,6 +222,54 @@ body {
 .idle-parse-note {
   margin: 10px 0 0;
   font-size: 12px;
+}
+
+/* Idle breakdown: banded emphasis on % */
+.idle-group-list {
+  margin: 8px 0 0 16px;
+  padding: 0;
+  font-size: 12px;
+  list-style: disc;
+}
+.idle-group-list li {
+  margin: 5px 0;
+  padding: 5px 10px 5px 4px;
+  margin-left: -6px;
+  border-radius: var(--radius);
+}
+.idle-group-list li.idle-pct-yellow {
+  background: var(--amber-bg);
+  color: var(--text-pri);
+}
+.idle-group-list li.idle-pct-orange {
+  background: var(--idle-orange-bg);
+  color: var(--idle-orange-fg);
+}
+.idle-group-list li.idle-pct-red {
+  background: var(--red-bg);
+  color: var(--red);
+  font-weight: 600;
+}
+.panel-kpi.idle-split-kpi.idle-pct-yellow {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--amber-bg);
+  color: var(--text-pri);
+}
+.panel-kpi.idle-split-kpi.idle-pct-orange {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--idle-orange-bg);
+  color: var(--idle-orange-fg);
+}
+.panel-kpi.idle-split-kpi.idle-pct-red {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--red-bg);
+  color: var(--red);
 }
 
 /**
