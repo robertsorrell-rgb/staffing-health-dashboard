@@ -118,11 +118,21 @@ function resolveSiteId(res, siteName) {
   throw new Error(`Assembled site not found: ${siteName}`);
 }
 
+/**
+ * Map configured queue names → Assembled queue id. Matching is case-insensitive on name
+ * (Netlify/prod env sometimes drifts from exact casing in Assembled).
+ */
 function resolveQueueIds(res, queueNames) {
+  const want = new Map();
+  for (const q of queueNames) {
+    const canon = String(q || '').trim();
+    if (canon) want.set(canon.toLowerCase(), canon);
+  }
   const out = {};
   for (const row of objectRows(res.queues)) {
     const name = String(row.name || '').trim();
-    if (queueNames.includes(name)) out[name] = String(row.id != null ? row.id : '');
+    const canon = want.get(name.toLowerCase());
+    if (canon) out[canon] = String(row.id != null ? row.id : '');
   }
   return out;
 }
@@ -166,6 +176,7 @@ async function loadNetStaffingFromAssembled() {
   const queuesRes = await assembledFetch(apiBase, apiKey, '/queues', {});
   const siteId = resolveSiteId(sitesRes, siteName);
   const queueIdMap = resolveQueueIds(queuesRes, queueNames);
+  const missingQueueNames = queueNames.filter((q) => !queueIdMap[q]);
 
   const rollup = hourRollupMode();
 
@@ -272,6 +283,17 @@ async function loadNetStaffingFromAssembled() {
     if (Object.keys(hoursOut).length > 0) matrix.push({ group: label, hours: hoursOut });
   }
 
+  let emptyNote;
+  if (matrix.length === 0) {
+    if (missingQueueNames.length) {
+      emptyNote = `Assembled has no matching queues for: ${missingQueueNames.join(
+        ', '
+      )}. Names must match Assembled (see CAP_QUEUE_MAP / ASSEMBLED_NET_STAFFING_QUEUES). Site “${siteName}”, channel “${channel}”.`;
+    } else {
+      emptyNote = `Assembled returned no interval rows for today CT (${dateIso}) with site “${siteName}”, channel “${channel}”. Queues resolved OK — check schedules/forecast, operating window (ASSEMBLED_OP_*), or API scope.`;
+    }
+  }
+
   return {
     ok: true,
     matrix,
@@ -281,11 +303,9 @@ async function loadNetStaffingFromAssembled() {
     net_staffing_unit: 'people',
     assembled_hour_rollup: rollup,
     assembled_queues_used: queueNames,
+    assembled_queues_missing: missingQueueNames.length ? missingQueueNames : undefined,
     fetched_at: new Date().toISOString(),
-    note:
-      matrix.length === 0
-        ? 'Assembled returned no intervals for today CT (queues/site/channel or operating window).'
-        : undefined,
+    note: emptyNote,
   };
 }
 
