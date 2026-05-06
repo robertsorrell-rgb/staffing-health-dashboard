@@ -1007,7 +1007,14 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
     if (combinedWeek.auto_fetch_error) {
       body += `<p class="panel-error">Requests_Submissions tab (week): ${escapeHtml(combinedWeek.auto_fetch_error)}</p>`;
     }
-    body += htmlVtoCombinedByGroupTable(mergeCombinedByGroupRows(combinedWeek.by_group || []), 'By sales group');
+    const weekMerged = mergeCombinedByGroupRows(combinedWeek.by_group || []);
+    let hoursWeekResolved = 0;
+    for (const r of weekMerged) {
+      hoursWeekResolved += (Number(r.targeted_hours) || 0) + (Number(r.automated_hours) || 0);
+    }
+    hoursWeekResolved = Math.round(hoursWeekResolved * 100) / 100;
+    body += `<div class="rollup-total"><span class="rollup-total-label">Approved VTO hours</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursWeekResolved)} h</strong></div>`;
+    body += htmlVtoCombinedByGroupTable(weekMerged, 'By sales group');
     body += `</section>`;
 
     body += `</div>`;
