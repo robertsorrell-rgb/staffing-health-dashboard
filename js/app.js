@@ -165,13 +165,13 @@ function renderSparkline(container, spark) {
   const defined = vals.filter((v) => v != null);
   if (!defined.length) return;
 
-  const w = 472;
-  const chartH = 48;
-  const axisH = 26;
+  const w = 560;
+  const chartH = 68;
+  const axisH = 28;
   const padX = 12;
   /** Left gutter for % axis labels */
-  const padYL = 34;
-  const padTop = 8;
+  const padYL = 36;
+  const padTop = 10;
   const totalH = padTop + chartH + axisH;
   const plotRight = w - padX;
   const plotW = plotRight - padYL;
@@ -255,7 +255,7 @@ function renderSparkline(container, spark) {
   path.setAttribute('d', d.trim());
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke', 'var(--sky)');
-  path.setAttribute('stroke-width', '2');
+  path.setAttribute('stroke-width', '2.25');
   path.setAttribute('stroke-linecap', 'round');
   path.setAttribute('stroke-linejoin', 'round');
   svg.appendChild(path);

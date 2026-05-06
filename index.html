@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staffing Health Dashboard</title>
-  <link rel="stylesheet" href="css/styles.css?v=24" />
+  <link rel="stylesheet" href="css/styles.css?v=25" />
 </head>
 <body>
   <header class="app-header" role="banner">
@@ -62,7 +62,6 @@
       <div class="panel-grid panel-grid-fullwidth">
         <div class="panel-card" id="panel-idle">
           <div class="panel-title">Idle time (CS_Hourly_Log)</div>
-          <div class="panel-muted">Weighted floor ΣAvail ÷ Σ(Avail + On Call) · Central Time</div>
           <div id="idle-spark" class="sparkline-wrap"></div>
           <p class="panel-muted idle-parse-note" id="idle-parse-note" hidden></p>
           <div class="idle-split" id="idle-split">
@@ -91,6 +90,6 @@
     </section>
   </main>
 
-  <script type="module" src="js/app.js?v=27"></script>
+  <script type="module" src="js/app.js?v=28"></script>
 </body>
 </html>

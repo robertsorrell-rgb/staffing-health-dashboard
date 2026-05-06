@@ -420,7 +420,7 @@ a.digest-link {
 }
 
 .sparkline-wrap {
-  margin-top: 8px;
+  margin-top: 10px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -428,7 +428,7 @@ a.digest-link {
 }
 .sparkline-svg {
   width: 100%;
-  max-width: 520px;
+  max-width: 640px;
   height: auto;
   display: block;
 }
@@ -444,7 +444,7 @@ a.digest-link {
 }
 .sparkline-y-label {
   fill: var(--text-sec);
-  font-size: 9px;
+  font-size: 10px;
   font-family: var(--font-mono);
 }
 .sparkline-tick {
@@ -453,7 +453,7 @@ a.digest-link {
 }
 .sparkline-hour-label {
   fill: var(--text-sec);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-family: var(--font-mono);
 }
 .sparkline-axis-caption {
