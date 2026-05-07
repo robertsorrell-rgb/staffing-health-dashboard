@@ -771,7 +771,6 @@ async function loadNetStaffingFromAssembled() {
   }
 
   let emptyNote;
-  let assembledNoteOk;
   if (matrix.length === 0) {
     if (missingQueueNames.length) {
       emptyNote = `Assembled has no matching queues for: ${missingQueueNames.join(
@@ -787,55 +786,6 @@ async function loadNetStaffingFromAssembled() {
           : `site “${siteName}” as site_id + site (queue-only retry disabled — set ASSEMBLED_ALLOW_NO_SITE_RETRY=1 only if site-scoped pulls are empty; retry blends all sites and breaks timeline parity)`;
       emptyNote = `Assembled returned no staffing intervals for today CT (${dateIso}), channel “${channel}”, ${siteHint}. Queues matched — in Assembled, confirm **net staffing** (scheduled vs required / staffing surplus) exists for this date, channel, and queues; if it’s empty there too, this is missing Assembled data or API scope, not Netlify. Otherwise confirm the API key is a full key for this company (not restricted) and the channel name matches Assembled exactly.`;
     }
-  } else {
-    const parts = [];
-    if (assembledOmitSiteAuto) {
-      parts.push(
-        'WARNING: Net staffing used queue + channel only (ASSEMBLED_ALLOW_NO_SITE_RETRY) — mixed all sites; compare only if timeline has no site filter.'
-      );
-    }
-    if (scheduleSource === 'explicit') {
-      parts.push(
-        'ASSEMBLED_SCHEDULE_ID is set — confirm Staffing timeline uses that same schedule (not another template).'
-      );
-    } else if (scheduleSource === 'resolved_name') {
-      parts.push(
-        `schedule_id auto-resolved from Assembled name “${scheduleAutoName}” (matches typical “Default Schedule” timeline). Set ASSEMBLED_SCHEDULE_ID to pin the UUID.`
-      );
-    } else if (scheduleSource === 'resolve_failed' && scheduleAutoName) {
-      parts.push(
-        `Could not resolve schedule “${scheduleAutoName}” automatically (this API key/account does not expose schedule lists). Set **ASSEMBLED_SCHEDULE_ID** in Netlify: run locally **npm run assembled:list-schedules** (prints UUIDs if any probe works), or Chrome DevTools → Network on Staffing timeline while that schedule is selected and search for \`schedule\`. Until then Assembled defaults to **master schedule** — nets differ from “Default Schedule”.`
-      );
-    } else {
-      parts.push(
-        'No schedule_id: Assembled defaults to **master schedule**. Timeline “Default Schedule” usually needs ASSEMBLED_SCHEDULE_ID or auto-resolve (ASSEMBLED_SCHEDULE_MATCH_NAME).'
-      );
-    }
-    if (scheduleId) {
-      parts.push(
-        `Using schedule_id prefix **${scheduleId.slice(0, 8)}**… (must match Staffing timeline URL). Try ASSEMBLED_API_VERSION if schedule filter seems ignored.`
-      );
-    }
-    const slotsPerHour = 3600 / intervalSec;
-    const rollupLab =
-      rollup === 'sum'
-        ? `sum of ${Math.round(slotsPerHour)} interval(s) in that clock hour`
-        : `average of ${Math.round(slotsPerHour)} interval(s) (${intervalSec}s each) in that clock hour`;
-    parts.push(
-      `Each queue hourly cell = ${rollupLab}. Aggregate = sum of the five queue hourly cells.`
-    );
-    if (netMode === 'api') {
-      parts.push(
-        'Net per 30‑min interval: **staffing_net** when present, else scheduled − staffing_required.forecasted (default — timeline “Net” is usually this Surplus-style value, not the visible Scheduled−Required subtraction).'
-      );
-    } else if (netMode === 'sched_minus_forecasted') {
-      parts.push(
-        'Net per 30‑min interval: **scheduled − forecasted** only (ASSEMBLED_NET_COMPUTE=timeline). Ignores staffing_net — often disagrees with the blue timeline “Net” row when that row ≠ Sched−Req on screen.'
-      );
-    } else {
-      parts.push(`Net per interval: ${netMode}. Compare raw intervals: npm run assembled:inspect-forecast -- "Queue Name".`);
-    }
-    assembledNoteOk = parts.join(' ');
   }
 
   return {
@@ -854,7 +804,6 @@ async function loadNetStaffingFromAssembled() {
     assembled_site_filter: envSkipSite ? 'none_env' : assembledOmitSiteAuto ? 'none_auto_retry' : 'site_id',
     fetched_at: new Date().toISOString(),
     note: emptyNote,
-    assembled_note: assembledNoteOk,
   };
 }
 

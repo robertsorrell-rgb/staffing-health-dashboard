@@ -325,17 +325,11 @@ function setNetStaffingSourceBanner(payload) {
   const warns = [];
   if (payload.assembled_skipped_reason) warns.push(payload.assembled_skipped_reason);
   if (payload.assembled_error) warns.push(payload.assembled_error);
-  const info = payload.assembled_note ? String(payload.assembled_note).trim() : '';
   if (warns.length) {
     el.hidden = false;
-    el.textContent = info ? `${warns.join(' ')} ${info}` : warns.join(' ');
+    el.textContent = warns.join(' ');
     el.style.fontWeight = '600';
     el.style.color = 'var(--amber)';
-  } else if (info) {
-    el.hidden = false;
-    el.textContent = info;
-    el.style.fontWeight = '';
-    el.style.color = 'var(--text-sec)';
   } else {
     el.hidden = true;
     el.textContent = '';
@@ -845,10 +839,6 @@ function mountStlHourlySparklines(panelBody, data) {
 
   const axisSlot = panelBody.querySelector('.stl-spark-shared-axis');
   if (axisSlot) renderStlSharedHourAxis(axisSlot, hMin, hMax);
-
-  panelBody.querySelectorAll('.stl-spark-y-max-slot').forEach((ySlot) => {
-    ySlot.textContent = formatStlDuration(yMax);
-  });
 }
 
 function escapeHtml(s) {
@@ -871,21 +861,36 @@ function escapeAttr(s) {
     .trim();
 }
 
-function previewTableHtml(headers, colIndices, rows, headLabels = null) {
+/** True when Bobbot status/decision cell indicates a denial (row-level highlight). */
+function isPtoDeniedStatusCell(cell) {
+  const s = String(cell ?? '').trim().toLowerCase();
+  if (!s || /\bnot\s+denied\b/.test(s)) return false;
+  return /\bdenied\b/.test(s);
+}
+
+/**
+ * @param {object | null} [options]
+ * @param {(row: unknown[]) => string} [options.rowClassForRow] — CSS class for `<tr>` (e.g. `pto-row-denied`).
+ */
+function previewTableHtml(headers, colIndices, rows, headLabels = null, options = null) {
   if (!headers?.length || !colIndices?.length) return '<p class="panel-muted">No preview columns</p>';
+  const rowClassFn =
+    options && typeof options.rowClassForRow === 'function' ? options.rowClassForRow : null;
   const th = colIndices
     .map((i, j) => `<th>${escapeHtml(String(headLabels?.[j] ?? headers[i] ?? ''))}</th>`)
     .join('');
   const body = rows
     .slice(0, 12)
     .map((r) => {
+      const rowCls = rowClassFn ? rowClassFn(r) : '';
+      const trAttr = rowCls ? ` class="${escapeHtml(String(rowCls))}"` : '';
       const cells = colIndices
         .map((i) => {
           const raw = String(r[i] ?? '');
           return `<td title="${escapeAttr(raw)}">${escapeHtml(raw)}</td>`;
         })
         .join('');
-      return `<tr>${cells}</tr>`;
+      return `<tr${trAttr}>${cells}</tr>`;
     })
     .join('');
   return `<div class="preview-table-wrap"><table class="preview-table"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
@@ -1029,7 +1034,11 @@ function tablePreviewPick(headers, rows, prefs) {
   if (prefs?.pick === 'bobbot-pto') {
     const { indices, labels } = pickBobbotPtoIndices(headers);
     if (!indices.length) return '<p class="panel-muted">No preview columns</p>';
-    return previewTableHtml(headers, indices, rows, labels);
+    const { statusI } = resolveBobbotPtoColumns(headers);
+    return previewTableHtml(headers, indices, rows, labels, {
+      rowClassForRow: (row) =>
+        statusI >= 0 && Array.isArray(row) && isPtoDeniedStatusCell(row[statusI]) ? 'pto-row-denied' : '',
+    });
   }
   const idx = pickPreviewIndices(headers, prefs || {});
   return previewTableHtml(headers, idx, rows);
@@ -1068,25 +1077,38 @@ function formatStlDuration(m) {
   return `${String(n).replace(/\.?0+$/, '')} min`;
 }
 
+/** Last-hour table: &gt;2 min warn (orange), ≥4 min bad (red). */
+function stlSpeedTdClassLastHour(mins) {
+  const n = Number(mins);
+  if (!Number.isFinite(n)) return 'num';
+  if (n >= 4) return 'num stl-speed-bad';
+  if (n > 2) return 'num stl-speed-warn';
+  return 'num';
+}
+
+/** Today table / spark value: &gt;2 min warn, ≥6 min bad. */
+function stlSpeedClassToday(mins) {
+  const n = Number(mins);
+  if (!Number.isFinite(n)) return '';
+  if (n >= 6) return 'stl-speed-bad';
+  if (n > 2) return 'stl-speed-warn';
+  return '';
+}
+
 /** Third column: hourly STL sparklines (mounted after innerHTML). */
-function htmlStlSparkColumnMount(todayGroups, reportingHourCt = null) {
-  const hrHint =
-    reportingHourCt != null && Number.isFinite(Number(reportingHourCt))
-      ? ` Lead-hour buckets before ${formatSparklineHour12(Number(reportingHourCt))} CT excluded.`
-      : '';
+function htmlStlSparkColumnMount(todayGroups) {
   const rows = todayGroups
-    .map(
-      (g, i) =>
-        `<div class="stl-spark-row">
+    .map((g, i) => {
+      const sev = stlSpeedClassToday(g.avg_speed_to_lead_minutes);
+      return `<div class="stl-spark-row">
           <span class="stl-spark-row-label">${escapeHtml(String(g.group))}</span>
           <div class="stl-spark-mount-wrap"><div class="stl-spark-mount" data-stl-spark-idx="${i}"></div></div>
-          <span class="stl-spark-row-val">${formatStlDuration(g.avg_speed_to_lead_minutes)}</span>
-        </div>`
-    )
+          <span class="stl-spark-row-val${sev ? ` ${sev}` : ''}">${formatStlDuration(g.avg_speed_to_lead_minutes)}</span>
+        </div>`;
+    })
     .join('');
   return `<div class="stl-breakdown-col stl-spark-col">
-    <div class="panel-sub stl-split-heading">Today · hourly trend</div>
-    <p class="panel-muted stl-day-bars-hint">Shared CT hour axis &amp; Y scale; lines like idle (slower = warmer). Chart top = <strong class="stl-spark-y-max-slot">—</strong>.${hrHint}</p>
+    <div class="stl-split-heading">Today · hourly trend</div>
     <div class="stl-spark-rows">${rows}</div>
     <div class="stl-spark-shared-axis" aria-hidden="true"></div>
   </div>`;
@@ -1301,7 +1323,15 @@ function htmlBobbotReachoutsColumn(bobbotData, bobbotErr, idleData, idleErr) {
 }
 
 /** One column: sales group × hours for approved or denied (`pto_week_*` from `/api/bobbot`). */
-function htmlPtoWeekRollupCol(week, hoursKey, hoursColTitle, colHeading, emptyNoRows, emptyNoHoursPrefix) {
+function htmlPtoWeekRollupCol(
+  week,
+  hoursKey,
+  hoursColTitle,
+  colHeading,
+  emptyNoRows,
+  emptyNoHoursPrefix,
+  deniedRowHighlight = false
+) {
   if (!week || typeof week !== 'object') {
     return `<div class="idle-split-col"><div class="idle-split-heading">${escapeHtml(colHeading)}</div><p class="panel-muted" style="margin-top:6px;">No data.</p></div>`;
   }
@@ -1320,14 +1350,16 @@ function htmlPtoWeekRollupCol(week, hoursKey, hoursColTitle, colHeading, emptyNo
         : '';
     inner = `<p class="panel-muted" style="margin-top:6px;line-height:1.4;">${escapeHtml(emptyNoHoursPrefix)} (${rowsMatched}).${miss}</p>`;
   } else {
+    const trCls = deniedRowHighlight ? ' class="pto-row-denied"' : '';
     const thead = `<thead><tr><th>Sales group</th><th class="num">${escapeHtml(hoursColTitle)}</th></tr></thead>`;
     const tbody = groupsPositive
       .map(
         (r) =>
-          `<tr><td>${escapeHtml(String(r.group))}</td><td class="num">${formatHoursDisplay(r[hoursKey])}</td></tr>`
+          `<tr${trCls}><td>${escapeHtml(String(r.group))}</td><td class="num">${formatHoursDisplay(r[hoursKey])}</td></tr>`
       )
       .join('');
-    const foot = `<tfoot><tr class="rollup-sum-row"><td>Total</td><td class="num">${formatHoursDisplay(totalH)}</td></tr></tfoot>`;
+    const footRowCls = deniedRowHighlight ? 'rollup-sum-row pto-row-denied' : 'rollup-sum-row';
+    const foot = `<tfoot><tr class="${footRowCls}"><td>Total</td><td class="num">${formatHoursDisplay(totalH)}</td></tr></tfoot>`;
     inner = `<div class="preview-table-wrap"><table class="preview-table rollup-table">${thead}<tbody>${tbody}</tbody>${foot}</table></div>`;
   }
 
@@ -1372,7 +1404,8 @@ function htmlPtoWeekRollupSection(approved, denied, errMsg, configured) {
     'Denied h',
     'Denied',
     'No denied PTO dated this Sun–Sat week (Central).',
-    'Denied decisions this week, but no hours summed'
+    'Denied decisions this week, but no hours summed',
+    true
   );
 
   return `
@@ -2494,28 +2527,15 @@ function renderSpeedToLeadPanel(data, errMsg) {
   }
 
   const sum = data.summary || {};
-  const src =
-    data.source === 'looker'
-      ? 'Looker'
-      : data.source === 'sheet'
-        ? 'Sheet'
-        : data.source
-          ? String(data.source)
-          : '';
-  const srcBit = src ? ` · ${src}` : '';
-  const col = data.speed_column_used ? ` · ${data.speed_column_used}` : '';
   const reportHr =
     data.stl_reporting_day_start_hour_ct != null && Number.isFinite(Number(data.stl_reporting_day_start_hour_ct))
       ? Number(data.stl_reporting_day_start_hour_ct)
       : null;
-  const rollupWindow =
-    reportHr != null ? ` STL rollups use lead-hour buckets from ${formatSparklineHour12(reportHr)} CT onward.` : '';
-  const baseMeta = `Today (CT): ${sum.rows_with_valid_minutes ?? 0} leads with minutes / ${sum.rows_today ?? 0} rows${col}${srcBit}.${rollupWindow}`;
   const explore = data.looker_explore_url;
   if (explore && /^https?:\/\//i.test(String(explore))) {
-    meta.innerHTML = `${escapeHtml(baseMeta)} <a class="digest-link stl-looker-link" href="${escapeAttr(explore)}" target="_blank" rel="noopener noreferrer">Open in Looker →</a>`;
+    meta.innerHTML = `<a class="digest-link stl-looker-link" href="${escapeAttr(explore)}" target="_blank" rel="noopener noreferrer">Open in Looker →</a>`;
   } else {
-    meta.textContent = baseMeta;
+    meta.textContent = '';
   }
 
   const note = data.note
@@ -2526,11 +2546,7 @@ function renderSpeedToLeadPanel(data, errMsg) {
     sum.rows_excluded_above_cap > 0 && sum.summary_cap_minutes != null
       ? `<p class="panel-muted" style="margin-top:8px;">${escapeHtml(String(sum.rows_excluded_above_cap))} lead(s) over ${escapeHtml(String(sum.summary_cap_minutes))} min omitted from rollups (tables &amp; hourly trend).</p>`
       : '';
-  const capOvernight =
-    sum.rows_excluded_before_reporting_hour > 0 && reportHr != null
-      ? `<p class="panel-muted" style="margin-top:8px;">${escapeHtml(String(sum.rows_excluded_before_reporting_hour))} lead(s) with lead-hour before ${escapeHtml(formatSparklineHour12(reportHr))} CT omitted from STL rollups.</p>`
-      : '';
-  const capNote = capLong + capOvernight;
+  const capNote = capLong;
 
   const lastHour = data.stl_last_hour_by_group;
   const todayGroups = data.stl_today_by_group;
@@ -2542,23 +2558,30 @@ function renderSpeedToLeadPanel(data, errMsg) {
     const hourTitle = data.stl_last_hour_label
       ? `Last hour · ${data.stl_last_hour_label}`
       : 'Last hour';
-    const rowHtml = (rows) =>
+    const rowHtmlLastHour = (rows) =>
       rows
         .map(
           (g) =>
-            `<tr><td>${escapeHtml(String(g.group))}</td><td class="num">${g.rows}</td><td class="num">${formatStlDuration(g.avg_speed_to_lead_minutes)}</td></tr>`
+            `<tr><td>${escapeHtml(String(g.group))}</td><td class="num">${g.rows}</td><td class="${stlSpeedTdClassLastHour(g.avg_speed_to_lead_minutes)}">${formatStlDuration(g.avg_speed_to_lead_minutes)}</td></tr>`
         )
+        .join('');
+    const rowHtmlToday = (rows) =>
+      rows
+        .map((g) => {
+          const sev = stlSpeedClassToday(g.avg_speed_to_lead_minutes);
+          return `<tr><td>${escapeHtml(String(g.group))}</td><td class="num">${g.rows}</td><td class="num${sev ? ` ${sev}` : ''}">${formatStlDuration(g.avg_speed_to_lead_minutes)}</td></tr>`;
+        })
         .join('');
     breakdown = `<div class="stl-breakdown-grid">
       <div class="stl-breakdown-col">
-        <div class="panel-sub stl-split-heading">${escapeHtml(hourTitle)}</div>
-        <div class="preview-table-wrap"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Speed to lead</th></tr></thead><tbody>${rowHtml(lastHour)}</tbody></table></div>
+        <div class="stl-split-heading">${escapeHtml(hourTitle)}</div>
+        <div class="preview-table-wrap stl-table-wrap"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Speed to lead</th></tr></thead><tbody>${rowHtmlLastHour(lastHour)}</tbody></table></div>
       </div>
       <div class="stl-breakdown-col">
-        <div class="panel-sub stl-split-heading">${escapeHtml(todayHead)}</div>
-        <div class="preview-table-wrap"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Speed to lead</th></tr></thead><tbody>${rowHtml(todayGroups)}</tbody></table></div>
+        <div class="stl-split-heading">${escapeHtml(todayHead)}</div>
+        <div class="preview-table-wrap stl-table-wrap"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Speed to lead</th></tr></thead><tbody>${rowHtmlToday(todayGroups)}</tbody></table></div>
       </div>
-      ${htmlStlSparkColumnMount(todayGroups, reportHr)}
+      ${htmlStlSparkColumnMount(todayGroups)}
     </div>`;
   } else {
     const byHourGroup = data.by_hour_sales_group || [];
