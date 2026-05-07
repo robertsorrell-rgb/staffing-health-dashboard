@@ -39,6 +39,7 @@ const REFRESH_MS = parseInt(
  * in one instant from the same service account — trips “Read requests per minute per user” on Netlify.
  */
 const FETCH_STAGGER_MS = 220;
+const VTO_ESTIMATED_LABOR_SAVINGS_RATE_USD = 25;
 
 const ENDPOINTS = [
   ['net-staffing', '/api/net-staffing'],
@@ -688,6 +689,168 @@ function renderSparkline(container, spark) {
   }
 }
 
+/** Match mini STL sparks & shared axis (viewBox width). */
+const STL_SPARK_VB_W = 200;
+
+/** Map STL minutes to idle-like heat (higher = warmer stroke). */
+function stlSeverityToSparkColorHex(mins, yMax) {
+  const y = Math.max(Number(yMax) || 1, 1e-6);
+  const m = Math.min(y, Math.max(0, Number(mins) || 0));
+  const pct = (m / y) * 100;
+  return idleSparkColorHex(pct);
+}
+
+function renderStlMiniSparkline(container, hours, yMax, hourMin, hourMax, rowIdx) {
+  container.innerHTML = '';
+  const pts = [];
+  for (const cell of hours) {
+    if (cell.avg_speed_to_lead_minutes == null) continue;
+    pts.push({
+      hour: cell.hour,
+      v: Number(cell.avg_speed_to_lead_minutes),
+      rows: cell.rows,
+    });
+  }
+  if (!pts.length) {
+    const sp = document.createElement('span');
+    sp.className = 'panel-muted stl-spark-empty';
+    sp.textContent = '—';
+    container.appendChild(sp);
+    return;
+  }
+
+  const w = STL_SPARK_VB_W;
+  const chartH = 16;
+  const padTop = 2;
+  const padX = 2;
+  const plotW = w - padX * 2;
+  const span = Math.max(hourMax - hourMin, 1e-6);
+  const xAt = (h) => padX + ((h - hourMin) / span) * plotW;
+  const yMaxNum = Math.max(Number(yMax) || 1, 1e-6);
+  const yAt = (v) => padTop + chartH - (Math.min(yMaxNum, Math.max(0, v)) / yMaxNum) * chartH;
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const totalH = padTop + chartH + 2;
+  svg.setAttribute('viewBox', `0 0 ${w} ${totalH}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.classList.add('stl-mini-spark-svg');
+
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  svg.appendChild(defs);
+
+  const axisY = padTop + chartH;
+  const axis = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  axis.setAttribute('x1', String(padX));
+  axis.setAttribute('y1', String(axisY));
+  axis.setAttribute('x2', String(w - padX));
+  axis.setAttribute('y2', String(axisY));
+  axis.setAttribute('stroke', '#b0a898');
+  axis.setAttribute('stroke-width', '1');
+  svg.appendChild(axis);
+
+  const mapped = pts.map((p) => ({ x: xAt(p.hour), y: yAt(p.v), ...p }));
+
+  if (mapped.length >= 2) {
+    for (let si = 0; si < mapped.length - 1; si++) {
+      const a = mapped[si];
+      const b = mapped[si + 1];
+      const gid = `stl-spark-r${rowIdx}-s${si}`;
+      const lg = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+      lg.setAttribute('id', gid);
+      lg.setAttribute('gradientUnits', 'userSpaceOnUse');
+      lg.setAttribute('x1', String(a.x));
+      lg.setAttribute('y1', String(a.y));
+      lg.setAttribute('x2', String(b.x));
+      lg.setAttribute('y2', String(b.y));
+      const stop0 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+      stop0.setAttribute('offset', '0%');
+      stop0.setAttribute('stop-color', stlSeverityToSparkColorHex(a.v, yMaxNum));
+      const stop1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+      stop1.setAttribute('offset', '100%');
+      stop1.setAttribute('stop-color', stlSeverityToSparkColorHex(b.v, yMaxNum));
+      lg.appendChild(stop0);
+      lg.appendChild(stop1);
+      defs.appendChild(lg);
+
+      const seg = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      seg.setAttribute('x1', String(a.x));
+      seg.setAttribute('y1', String(a.y));
+      seg.setAttribute('x2', String(b.x));
+      seg.setAttribute('y2', String(b.y));
+      seg.setAttribute('stroke', `url(#${gid})`);
+      seg.setAttribute('stroke-width', '2');
+      seg.setAttribute('stroke-linecap', 'round');
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = `${formatSparklineHour12(a.hour)}→${formatSparklineHour12(b.hour)} · ${formatStlDuration(a.v)} → ${formatStlDuration(b.v)}`;
+      seg.appendChild(title);
+      svg.appendChild(seg);
+    }
+  } else if (mapped.length === 1) {
+    const p = mapped[0];
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', String(p.x));
+    dot.setAttribute('cy', String(p.y));
+    dot.setAttribute('r', '3');
+    dot.setAttribute('fill', stlSeverityToSparkColorHex(p.v, yMaxNum));
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = `${formatSparklineHour12(p.hour)} · ${formatStlDuration(p.v)} · ${p.rows} leads`;
+    dot.appendChild(title);
+    svg.appendChild(dot);
+  }
+
+  container.appendChild(svg);
+}
+
+function renderStlSharedHourAxis(slotEl, hourMin, hourMax) {
+  slotEl.innerHTML = '';
+  const w = STL_SPARK_VB_W;
+  const h = 14;
+  const padX = 2;
+  const plotW = w - padX * 2;
+  const span = Math.max(hourMax - hourMin, 1e-6);
+  const xAt = (hr) => padX + ((hr - hourMin) / span) * plotW;
+  const ticks = pickSparklineHourTicks(hourMin, hourMax);
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.classList.add('stl-shared-axis-svg');
+
+  for (const th of ticks) {
+    const x = xAt(th);
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', String(x));
+    label.setAttribute('y', String(h - 1));
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('class', 'stl-shared-axis-label');
+    label.textContent = formatSparklineHour12(th);
+    svg.appendChild(label);
+  }
+  slotEl.appendChild(svg);
+}
+
+function mountStlHourlySparklines(panelBody, data) {
+  const yMax = data.stl_spark_y_max;
+  const hMin = data.stl_spark_hour_min;
+  const hMax = data.stl_spark_hour_max;
+  const seriesList = data.stl_hourly_by_group;
+  if (yMax == null || hMin == null || hMax == null || !seriesList?.length) return;
+
+  panelBody.querySelectorAll('.stl-spark-mount').forEach((el) => {
+    const idx = Number(el.getAttribute('data-stl-spark-idx'));
+    const entry = seriesList[idx];
+    if (!entry?.hours) return;
+    renderStlMiniSparkline(el, entry.hours, yMax, hMin, hMax, idx);
+  });
+
+  const axisSlot = panelBody.querySelector('.stl-spark-shared-axis');
+  if (axisSlot) renderStlSharedHourAxis(axisSlot, hMin, hMax);
+
+  panelBody.querySelectorAll('.stl-spark-y-max-slot').forEach((ySlot) => {
+    ySlot.textContent = formatStlDuration(yMax);
+  });
+}
+
 function escapeHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -891,12 +1054,54 @@ function formatStlMinutes(m) {
   return String(n).replace(/\.?0+$/, '');
 }
 
+/** Speed-to-lead display: seconds when under 1 minute, else minutes. */
+function formatStlDuration(m) {
+  if (m === null || m === undefined || m === '') return '—';
+  const num = Number(m);
+  if (Number.isNaN(num)) return '—';
+  if (num < 1) {
+    const sec = Math.round(num * 60);
+    return `${sec} sec`;
+  }
+  const n = Math.round(num * 100) / 100;
+  if (Number.isInteger(n)) return `${n} min`;
+  return `${String(n).replace(/\.?0+$/, '')} min`;
+}
+
+/** Third column: hourly STL sparklines (mounted after innerHTML). */
+function htmlStlSparkColumnMount(todayGroups) {
+  const rows = todayGroups
+    .map(
+      (g, i) =>
+        `<div class="stl-spark-row">
+          <span class="stl-spark-row-label">${escapeHtml(String(g.group))}</span>
+          <div class="stl-spark-mount-wrap"><div class="stl-spark-mount" data-stl-spark-idx="${i}"></div></div>
+          <span class="stl-spark-row-val">${formatStlDuration(g.avg_speed_to_lead_minutes)}</span>
+        </div>`
+    )
+    .join('');
+  return `<div class="stl-breakdown-col stl-spark-col">
+    <div class="panel-sub stl-split-heading">Today · hourly trend</div>
+    <p class="panel-muted stl-day-bars-hint">Shared CT hour axis &amp; Y scale; lines like idle (slower = warmer). Chart top = <strong class="stl-spark-y-max-slot">—</strong>.</p>
+    <div class="stl-spark-rows">${rows}</div>
+    <div class="stl-spark-shared-axis" aria-hidden="true"></div>
+  </div>`;
+}
+
 /** Whole hours, always rounded up (VTO approvals card). */
 function formatHoursCeilUp(h) {
   if (h === null || h === undefined || h === '') return '—';
   const num = Number(h);
   if (Number.isNaN(num)) return '—';
   return String(Math.ceil(num));
+}
+
+function formatUsdWhole(amount) {
+  if (amount === null || amount === undefined || amount === '') return '—';
+  const num = Number(amount);
+  if (Number.isNaN(num)) return '—';
+  const whole = Math.round(num);
+  return whole.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 }
 
 function htmlVtoCombinedByGroupTable(mergedRows, captionText) {
@@ -1014,7 +1219,10 @@ function targetedVtoPanel(data, errMsg, autoPanel = {}, autoPanelErr = null) {
       hoursWeekResolved += (Number(r.targeted_hours) || 0) + (Number(r.automated_hours) || 0);
     }
     hoursWeekResolved = Math.round(hoursWeekResolved * 100) / 100;
-    body += `<div class="rollup-total"><span class="rollup-total-label">Approved VTO hours</span> <strong class="rollup-total-value">${formatHoursCeilUp(hoursWeekResolved)} h</strong></div>`;
+    const hoursWeekApprovedCeil = Math.ceil(hoursWeekResolved);
+    const estimatedWeeklyLaborSavingsUsd =
+      hoursWeekApprovedCeil * VTO_ESTIMATED_LABOR_SAVINGS_RATE_USD;
+    body += `<div class="rollup-total"><span class="rollup-total-label">Approved VTO hours</span> <strong class="rollup-total-value">${String(hoursWeekApprovedCeil)} h</strong><div class="rollup-total-subline"><span class="rollup-total-subline-label">Est labor savings</span> <span class="rollup-total-subline-value">${formatUsdWhole(estimatedWeeklyLaborSavingsUsd)}</span></div></div>`;
     body += htmlVtoCombinedByGroupTable(weekMerged, 'By sales group');
     body += `</section>`;
 
@@ -1697,11 +1905,11 @@ function generateLocalDailyBrief(context, meta) {
     (stlCtx.avgMinutes != null || stlCtx.medianMinutes != null || (stlCtx.rowsWithMinutes || 0) > 0)
   ) {
     const bits = [];
-    if (stlCtx.avgMinutes != null) bits.push(`avg ${formatStlMinutes(stlCtx.avgMinutes)} min`);
-    if (stlCtx.medianMinutes != null) bits.push(`median ${formatStlMinutes(stlCtx.medianMinutes)} min`);
+    if (stlCtx.avgMinutes != null) bits.push(`avg ${formatStlDuration(stlCtx.avgMinutes)}`);
+    if (stlCtx.medianMinutes != null) bits.push(`median ${formatStlDuration(stlCtx.medianMinutes)}`);
     const top = stlCtx.topGroups || [];
     const gt = top.length
-      ? ` Top groups by volume: ${top.map((g) => `${g.group} (${formatStlMinutes(g.avgMin)} min avg, n=${g.rows})`).join('; ')}.`
+      ? ` Top groups by volume: ${top.map((g) => `${g.group} (${formatStlDuration(g.avgMin)} avg, n=${g.rows})`).join('; ')}.`
       : '';
     const col = stlCtx.column ? ` (${stlCtx.column})` : '';
     summaryParts.push(`Speed to lead today${col}: ${bits.join(', ')}.${gt}`);
@@ -2306,47 +2514,69 @@ function renderSpeedToLeadPanel(data, errMsg) {
 
   const capNote =
     sum.rows_excluded_above_cap > 0 && sum.summary_cap_minutes != null
-      ? `<p class="panel-muted" style="margin-top:8px;">${escapeHtml(String(sum.rows_excluded_above_cap))} lead(s) over ${escapeHtml(String(sum.summary_cap_minutes))} min omitted from average/median.</p>`
+      ? `<p class="panel-muted" style="margin-top:8px;">${escapeHtml(String(sum.rows_excluded_above_cap))} lead(s) over ${escapeHtml(String(sum.summary_cap_minutes))} min omitted from rollups (tables &amp; hourly trend).</p>`
       : '';
 
-  const avg = sum.avg_speed_to_lead_minutes;
-  const med = sum.median_speed_to_lead_minutes;
-  const kpi = `<div class="stl-kpi-row">
-    <div class="stl-kpi"><span class="stl-kpi-label">Average</span><strong>${avg != null ? `${formatStlMinutes(avg)} min` : '—'}</strong></div>
-    <div class="stl-kpi"><span class="stl-kpi-label">Median</span><strong>${med != null ? `${formatStlMinutes(med)} min` : '—'}</strong></div>
-  </div>`;
-
-  const groups = data.by_sales_group || [];
-  const hours = data.by_hour || [];
+  const lastHour = data.stl_last_hour_by_group;
+  const todayGroups = data.stl_today_by_group;
   let breakdown = '';
-  if (groups.length || hours.length) {
-    const groupRows = groups
-      .slice(0, 18)
-      .map(
-        (g) =>
-          `<tr><td>${escapeHtml(String(g.group))}</td><td class="num">${g.rows}</td><td class="num">${g.avg_speed_to_lead_minutes != null ? `${formatStlMinutes(g.avg_speed_to_lead_minutes)} min` : '—'}</td><td class="num">${g.median_speed_to_lead_minutes != null ? `${formatStlMinutes(g.median_speed_to_lead_minutes)} min` : '—'}</td></tr>`
-      )
-      .join('');
-    const hourRows = hours
-      .slice(0, 28)
-      .map(
-        (h) =>
-          `<tr><td>${escapeHtml(String(h.hour_label))}</td><td class="num">${h.rows}</td><td class="num">${h.avg_speed_to_lead_minutes != null ? `${formatStlMinutes(h.avg_speed_to_lead_minutes)} min` : '—'}</td><td class="num">${h.median_speed_to_lead_minutes != null ? `${formatStlMinutes(h.median_speed_to_lead_minutes)} min` : '—'}</td></tr>`
-      )
-      .join('');
-    const groupBlock = groups.length
-      ? `<div class="preview-table-wrap stl-breakdown-col"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Avg</th><th class="num">Med</th></tr></thead><tbody>${groupRows}</tbody></table></div>`
-      : '';
-    const hourBlock = hours.length
-      ? `<div class="preview-table-wrap stl-breakdown-col"><table class="preview-table stl-breakdown-table"><thead><tr><th>Hour (grain)</th><th class="num">Leads</th><th class="num">Avg</th><th class="num">Med</th></tr></thead><tbody>${hourRows}</tbody></table></div>`
-      : '';
-    breakdown = `<div class="stl-breakdown-grid">${groupBlock}${hourBlock}</div>`;
-  } else if ((sum.rows_with_valid_minutes || 0) === 0 && (sum.rows_today || 0) > 0) {
-    breakdown =
-      '<p class="panel-muted" style="margin-top:12px;">No numeric speed-to-lead values parsed for today — check column detection or set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX.</p>';
+
+  if (Array.isArray(lastHour) && Array.isArray(todayGroups) && lastHour.length && todayGroups.length) {
+    const hourTitle = data.stl_last_hour_label
+      ? `Last hour · ${data.stl_last_hour_label}`
+      : 'Last hour';
+    const rowHtml = (rows) =>
+      rows
+        .map(
+          (g) =>
+            `<tr><td>${escapeHtml(String(g.group))}</td><td class="num">${g.rows}</td><td class="num">${formatStlDuration(g.avg_speed_to_lead_minutes)}</td></tr>`
+        )
+        .join('');
+    breakdown = `<div class="stl-breakdown-grid">
+      <div class="stl-breakdown-col">
+        <div class="panel-sub stl-split-heading">${escapeHtml(hourTitle)}</div>
+        <div class="preview-table-wrap"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Speed to lead</th></tr></thead><tbody>${rowHtml(lastHour)}</tbody></table></div>
+      </div>
+      <div class="stl-breakdown-col">
+        <div class="panel-sub stl-split-heading">Today (CT) · all day</div>
+        <div class="preview-table-wrap"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Speed to lead</th></tr></thead><tbody>${rowHtml(todayGroups)}</tbody></table></div>
+      </div>
+      ${htmlStlSparkColumnMount(todayGroups)}
+    </div>`;
+  } else {
+    const byHourGroup = data.by_hour_sales_group || [];
+    if (byHourGroup.length) {
+      const rows = byHourGroup
+        .slice(0, 240)
+        .map(
+          (r) =>
+            `<tr><td>${escapeHtml(String(r.hour_label))}</td><td>${escapeHtml(String(r.group))}</td><td class="num">${r.rows}</td><td class="num">${r.speed_to_lead_minutes != null ? formatStlDuration(r.speed_to_lead_minutes) : '—'}</td></tr>`
+        )
+        .join('');
+      breakdown = `<div class="preview-table-wrap"><table class="preview-table stl-breakdown-table"><thead><tr><th>Hour (CT)</th><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Speed to lead</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    } else if ((sum.rows_with_valid_minutes || 0) === 0 && (sum.rows_today || 0) > 0) {
+      breakdown =
+        '<p class="panel-muted" style="margin-top:12px;">No numeric speed-to-lead values parsed for today — check column detection or set SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX.</p>';
+    } else {
+      breakdown = '';
+    }
   }
 
-  body.innerHTML = note + capNote + kpi + breakdown;
+  const hasDualStl =
+    Array.isArray(lastHour) &&
+    Array.isArray(todayGroups) &&
+    lastHour.length > 0 &&
+    todayGroups.length > 0;
+  body.innerHTML = note + capNote + breakdown;
+  if (
+    hasDualStl &&
+    data.stl_hourly_by_group?.length &&
+    data.stl_spark_y_max != null &&
+    data.stl_spark_hour_min != null &&
+    data.stl_spark_hour_max != null
+  ) {
+    mountStlHourlySparklines(body, data);
+  }
 }
 
 function applyDashboardData(results, errors) {

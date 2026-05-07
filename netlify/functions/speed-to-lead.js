@@ -41,6 +41,15 @@ function salesGroupColumnIndex(headers) {
   return -1;
 }
 
+/** Omit from dual STL tables (last hour / today): unknown bucket + training cohort noise. */
+function excludeFromStlDualPanelGroup(group) {
+  const g = String(group ?? '').trim().replace(/\s+/g, ' ');
+  if (!g) return true;
+  if (g === '-' || g === '–' || g === '—') return true;
+  if (/^consumer sales training$/i.test(g)) return true;
+  return false;
+}
+
 /** Row grain hour bucket, e.g. contacts_w_lead_source.created_at_hour ("YYYY-MM-DD HH"). */
 function hourBucketColumnIndex(headers) {
   const lower = headers.map((h) => String(h || '').trim().toLowerCase());
@@ -57,6 +66,48 @@ function hourLabelSortKey(label) {
   if (m) return parseInt(m[1], 10);
   const m2 = s.match(/^(\d{1,2})(?::\d{2})?$/);
   return m2 ? parseInt(m2[1], 10) : 999;
+}
+
+function formatHourBucketLabel(rawLabel) {
+  const s = String(rawLabel ?? '').trim();
+  const m = s.match(/(?:^|\s)(\d{1,2})(?::\d{2})?$/);
+  if (!m) return s || '—';
+  const h = parseInt(m[1], 10);
+  if (!Number.isFinite(h) || h < 0 || h > 23) return s || '—';
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:00 ${suffix} CT`;
+}
+
+function hourOfDayFromCell(cell) {
+  if (cell == null || cell === '') return null;
+  if (typeof cell === 'number' && Number.isFinite(cell)) {
+    const n = Math.floor(cell);
+    return n >= 0 && n <= 23 ? n : null;
+  }
+  const s =
+    Object.prototype.toString.call(cell) === '[object Date]'
+      ? Number.isNaN(cell.getTime())
+        ? ''
+        : cell.toISOString()
+      : String(cell).trim();
+  if (!s) return null;
+
+  const isoT = s.match(/[Tt](\d{1,2}):\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/);
+  if (isoT) {
+    const h = parseInt(isoT[1], 10);
+    if (Number.isFinite(h) && h >= 0 && h <= 23) return h;
+  }
+  const dateTime = s.match(/\s(\d{1,2}):\d{2}(?::\d{2})?(?:\.\d+)?(?:\s|$)/);
+  if (dateTime) {
+    const h = parseInt(dateTime[1], 10);
+    if (Number.isFinite(h) && h >= 0 && h <= 23) return h;
+  }
+  const m = s.match(/(?:^|\s)(\d{1,2})(?::\d{2})?$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  if (!Number.isFinite(h) || h < 0 || h > 23) return null;
+  return h;
 }
 
 /** Prefer env SPEED_TO_LEAD_SPEED_MINUTES_COL_INDEX (0-based); else score headers. */
@@ -125,6 +176,7 @@ function findDateColumnIndex(headers) {
   for (let i = 0; i < lower.length; i++) {
     const h = lower[i];
     if (h.includes('created_at_date')) return i;
+    if (h.includes('created_at_hour')) return i;
     if (h.includes('lead_date') || h.includes('lead date')) return i;
     if (h.includes('event_date') || h.includes('event date')) return i;
   }
@@ -373,6 +425,8 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
   const byGroup = new Map();
   /** @type {Map<string, { sum: number, values: number[] }>} */
   const byHour = new Map();
+  /** @type {Map<string, { hour_sort: number, hour_label: string, group: string, sum: number, values: number[] }>} */
+  const byHourGroup = new Map();
   let excludedAboveCap = 0;
 
   for (const row of rows) {
@@ -390,11 +444,27 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
     byGroup.set(g, curG);
 
     if (hrCol >= 0) {
-      const hl = String(row[hrCol] ?? '').trim() || '—';
-      const curH = byHour.get(hl) || { sum: 0, values: [] };
-      curH.sum += mins;
-      curH.values.push(mins);
-      byHour.set(hl, curH);
+      const hourNum = hourOfDayFromCell(row[hrCol]);
+      if (hourNum != null) {
+        const hl = String(hourNum).padStart(2, '0');
+        const curH = byHour.get(hl) || { sum: 0, values: [] };
+        curH.sum += mins;
+        curH.values.push(mins);
+        byHour.set(hl, curH);
+
+        const gk = sgCol >= 0 ? String(row[sgCol] ?? '').trim() || '—' : '—';
+        const comboKey = `${hl}||${gk}`;
+        const curHG = byHourGroup.get(comboKey) || {
+          hour_sort: hourNum,
+          hour_label: formatHourBucketLabel(String(hourNum)),
+          group: gk,
+          sum: 0,
+          values: [],
+        };
+        curHG.sum += mins;
+        curHG.values.push(mins);
+        byHourGroup.set(comboKey, curHG);
+      }
     }
   }
 
@@ -425,7 +495,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
       const n = values.length;
       const medH = median(values);
       return {
-        hour_label,
+        hour_label: formatHourBucketLabel(hour_label),
         hour_sort: hourLabelSortKey(hour_label),
         rows: n,
         avg_speed_to_lead_minutes: Math.round((sum / n) * 100) / 100,
@@ -437,6 +507,161 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
       return String(a.hour_label).localeCompare(String(b.hour_label));
     })
     .map(({ hour_sort: _hs, ...rest }) => rest);
+
+  const by_hour_sales_group = [...byHourGroup.values()]
+    .map((r) => {
+      const n = r.values.length;
+      return {
+        hour_label: r.hour_label,
+        hour_sort: r.hour_sort,
+        group: r.group,
+        rows: n,
+        speed_to_lead_minutes: Math.round((r.sum / n) * 100) / 100,
+      };
+    })
+    .sort((a, b) => {
+      if (a.hour_sort !== b.hour_sort) return b.hour_sort - a.hour_sort;
+      if (b.rows !== a.rows) return b.rows - a.rows;
+      return String(a.group).localeCompare(String(b.group));
+    })
+    .map(({ hour_sort: _hs, ...rest }) => rest);
+
+  let stl_last_hour_label = null;
+  let stl_last_hour_by_group = null;
+  let stl_today_by_group = null;
+  let stl_spark_y_max = null;
+  let stl_spark_hour_min = null;
+  let stl_spark_hour_max = null;
+  let stl_hourly_by_group = null;
+
+  if (hrCol >= 0 && rows.length) {
+    let latestHour = null;
+    for (const row of rows) {
+      const mins = speedValueAsMinutes(row[speedCol], headers[speedCol]);
+      if (mins == null || mins < 0 || mins > MAX_MIN) continue;
+      if (mins > summaryCapMin) continue;
+      const h = hourOfDayFromCell(row[hrCol]);
+      if (h == null) continue;
+      if (latestHour == null || h > latestHour) latestHour = h;
+    }
+
+    if (latestHour != null) {
+      /** @type {Map<string, { sum: number, values: number[] }>} */
+      const hourOnly = new Map();
+      for (const row of rows) {
+        const h = hourOfDayFromCell(row[hrCol]);
+        if (h !== latestHour) continue;
+        const mins = speedValueAsMinutes(row[speedCol], headers[speedCol]);
+        if (mins == null || mins < 0 || mins > MAX_MIN) continue;
+        if (mins > summaryCapMin) continue;
+        const g = sgCol >= 0 ? String(row[sgCol] ?? '').trim() || '—' : '—';
+        const cur = hourOnly.get(g) || { sum: 0, values: [] };
+        cur.sum += mins;
+        cur.values.push(mins);
+        hourOnly.set(g, cur);
+      }
+
+      const union = new Set([...byGroup.keys(), ...hourOnly.keys()]);
+      const sortedGroups = [...union]
+        .filter((g) => !excludeFromStlDualPanelGroup(g))
+        .sort((a, b) => {
+          const na = byGroup.get(a)?.values.length || 0;
+          const nb = byGroup.get(b)?.values.length || 0;
+          if (nb !== na) return nb - na;
+          return String(a).localeCompare(String(b));
+        });
+
+      stl_last_hour_label = formatHourBucketLabel(String(latestHour));
+      stl_last_hour_by_group = sortedGroups.map((g) => {
+        const ho = hourOnly.get(g);
+        if (!ho || !ho.values.length) {
+          return {
+            group: g,
+            rows: 0,
+            avg_speed_to_lead_minutes: null,
+            median_speed_to_lead_minutes: null,
+          };
+        }
+        const n = ho.values.length;
+        const medG = median(ho.values);
+        return {
+          group: g,
+          rows: n,
+          avg_speed_to_lead_minutes: Math.round((ho.sum / n) * 100) / 100,
+          median_speed_to_lead_minutes: medG != null ? Math.round(medG * 100) / 100 : null,
+        };
+      });
+      stl_today_by_group = sortedGroups.map((g) => {
+        const d = byGroup.get(g);
+        if (!d || !d.values.length) {
+          return {
+            group: g,
+            rows: 0,
+            avg_speed_to_lead_minutes: null,
+            median_speed_to_lead_minutes: null,
+          };
+        }
+        const n = d.values.length;
+        const medG = median(d.values);
+        return {
+          group: g,
+          rows: n,
+          avg_speed_to_lead_minutes: Math.round((d.sum / n) * 100) / 100,
+          median_speed_to_lead_minutes: medG != null ? Math.round(medG * 100) / 100 : null,
+        };
+      });
+
+      /** Per-group avg STL by clock hour (for idle-style mini sparklines). */
+      /** @type {Map<string, Map<number, { avg_speed_to_lead_minutes: number, rows: number }>>} */
+      const groupHourAvgs = new Map();
+      for (const [comboKey, cur] of byHourGroup.entries()) {
+        const sep = comboKey.indexOf('||');
+        if (sep < 0) continue;
+        const hk = comboKey.slice(0, sep);
+        const gk = comboKey.slice(sep + 2);
+        if (excludeFromStlDualPanelGroup(gk)) continue;
+        const hNum = parseInt(hk, 10);
+        if (!Number.isFinite(hNum) || hNum < 0 || hNum > 23) continue;
+        const n = cur.values.length;
+        if (!n) continue;
+        const avgM = Math.round((cur.sum / n) * 100) / 100;
+        if (!groupHourAvgs.has(gk)) groupHourAvgs.set(gk, new Map());
+        groupHourAvgs.get(gk).set(hNum, { avg_speed_to_lead_minutes: avgM, rows: n });
+      }
+
+      let sparkHMin = 23;
+      let sparkHMax = 0;
+      let sparkPeak = 0;
+      for (const hm of groupHourAvgs.values()) {
+        for (const [h, cell] of hm) {
+          sparkHMin = Math.min(sparkHMin, h);
+          sparkHMax = Math.max(sparkHMax, h);
+          sparkPeak = Math.max(sparkPeak, cell.avg_speed_to_lead_minutes);
+        }
+      }
+
+      if (groupHourAvgs.size > 0 && sparkHMin <= sparkHMax) {
+        const peakForScale = Math.max(sparkPeak, 1e-6);
+        const yMaxSpark = Math.min(summaryCapMin, Math.max(5, Math.ceil(peakForScale * 1.06)));
+        stl_spark_y_max = yMaxSpark;
+        stl_spark_hour_min = sparkHMin;
+        stl_spark_hour_max = sparkHMax;
+        stl_hourly_by_group = sortedGroups.map((g) => {
+          const hm = groupHourAvgs.get(g);
+          const hours = [];
+          for (let h = sparkHMin; h <= sparkHMax; h++) {
+            const cell = hm?.get(h);
+            hours.push({
+              hour: h,
+              avg_speed_to_lead_minutes: cell?.avg_speed_to_lead_minutes ?? null,
+              rows: cell?.rows ?? 0,
+            });
+          }
+          return { group: g, hours };
+        });
+      }
+    }
+  }
 
   return {
     configured: true,
@@ -459,8 +684,24 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
     },
     by_sales_group: by_sales_group.slice(0, 32),
     by_hour: by_hour.slice(0, 48),
+    by_hour_sales_group: by_hour_sales_group.slice(0, 240),
     fetched_at: new Date().toISOString(),
     ...(speedColumnInferred ? { speed_column_inferred: true } : {}),
+    ...(stl_last_hour_by_group && stl_today_by_group
+      ? {
+          stl_last_hour_label,
+          stl_last_hour_by_group,
+          stl_today_by_group,
+          ...(stl_hourly_by_group && stl_spark_y_max != null
+            ? {
+                stl_spark_y_max,
+                stl_spark_hour_min,
+                stl_spark_hour_max,
+                stl_hourly_by_group,
+              }
+            : {}),
+        }
+      : {}),
     ...exploreBit,
   };
 }
@@ -556,6 +797,7 @@ exports.handler = async (event) => {
         lookerArtifact: artifact,
         looker_explore_url: lookerExploreUrl,
       });
+      payload.window_mode = 'intraday_today';
       return ok(payload, CACHE_SEC);
     }
 

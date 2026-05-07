@@ -1136,6 +1136,20 @@ a.digest-link {
   font-size: 22px;
   color: var(--navy);
 }
+.rollup-total-subline {
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--text-sec);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.rollup-total-subline-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  color: var(--text-main);
+}
 .rollup-breakdown {
   margin-top: 8px;
   font-size: 12px;
@@ -1502,13 +1516,13 @@ table.rollup-table tfoot tr.rollup-sum-row td {
 }
 .stl-breakdown-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
   margin-top: 14px;
   align-items: start;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .stl-breakdown-grid {
     grid-template-columns: 1fr;
   }
@@ -1521,6 +1535,90 @@ table.rollup-table tfoot tr.rollup-sum-row td {
 
 .stl-breakdown-table {
   font-size: 0.92rem;
+}
+
+#panel-speed-to-lead .stl-split-heading {
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+
+.stl-spark-col .stl-day-bars-hint {
+  font-size: 10px;
+  margin: 0 0 8px;
+  line-height: 1.35;
+  color: var(--text-sec);
+}
+
+.stl-spark-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stl-spark-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.stl-spark-row-label {
+  flex: 0 0 38%;
+  max-width: 38%;
+  min-width: 0;
+  font-size: 10px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-pri);
+}
+
+.stl-spark-row-val {
+  flex: 0 0 auto;
+  width: 4.25rem;
+  text-align: right;
+  font-size: 9px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-sec);
+}
+
+.stl-spark-mount-wrap {
+  flex: 1 1 auto;
+  min-width: 72px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+}
+
+.stl-spark-mount {
+  width: 100%;
+  height: 100%;
+}
+
+.stl-mini-spark-svg,
+.stl-shared-axis-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.stl-shared-axis-svg {
+  height: 14px;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
+.stl-shared-axis-label {
+  font-size: 8px;
+  fill: var(--text-sec);
+  font-family: var(--font-sans);
+}
+
+.stl-spark-empty {
+  font-size: 11px;
+  padding-left: 4px;
 }
 
 .stl-meta-line .stl-looker-link {
