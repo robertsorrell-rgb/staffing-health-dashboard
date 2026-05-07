@@ -1656,7 +1656,7 @@ function stripCalloutDisplayHandle(cell) {
 
 /**
  * Call-out main flow sheet: column indices for dashboard preview.
- * @returns {{ nameI: number, managerI: number, hoursI: number, salesI: number }}
+ * @returns {{ nameI: number, managerI: number, hoursI: number, salesI: number, infractions30dI: number }}
  */
 function resolveCalloutMainColumns(headers) {
   const lower = headers.map((h) => String(h || '').trim().toLowerCase());
@@ -1698,7 +1698,24 @@ function resolveCalloutMainColumns(headers) {
   let salesI = takeFirst((h) => h === 'sales group' || h.includes('sales group') || h === 'sales_group');
   if (salesI < 0) salesI = takeFirst((h) => h === 'queue');
 
-  return { nameI, managerI, hoursI, salesI };
+  let infractions30dI = takeFirst(
+    (h) =>
+      /#\s*of\s*infraction/.test(h) ||
+      (/\binfraction/.test(h) && /30/.test(h)) ||
+      (/\bviolations?\b/.test(h) && /30/.test(h))
+  );
+  if (infractions30dI < 0) {
+    infractions30dI = takeFirst(
+      (h) => /\bmissed\s*days\b/.test(h) && /\(?\s*30\s*d\s*\)?/i.test(h)
+    );
+  }
+  if (infractions30dI < 0) {
+    infractions30dI = takeFirst(
+      (h) => /\bcallouts?\b/.test(h) && /\(?\s*30\s*d\s*\)?/i.test(h)
+    );
+  }
+
+  return { nameI, managerI, hoursI, salesI, infractions30dI };
 }
 
 function formatCalloutHoursLostCell(cell) {
@@ -1713,13 +1730,21 @@ function formatCalloutHoursLostCell(cell) {
   return raw || '—';
 }
 
-/** Fixed layout: Name · Manager · Hours lost · Sales group (no timestamp/reason). */
+function formatCalloutInfractions30dCell(cell) {
+  if (cell == null || cell === '') return '—';
+  const raw = String(cell).trim();
+  const n = Number(raw.replace(/,/g, ''));
+  if (Number.isFinite(n)) return String(Math.round(n));
+  return raw || '—';
+}
+
+/** Fixed layout: Name · Manager · Hours lost · Sales group · 30d infractions (no timestamp/reason). */
 function htmlCalloutMainPreview(headers, rows) {
   if (!headers?.length) return '<p class="panel-muted">No headers</p>';
   if (!rows?.length) return '';
-  const { nameI, managerI, hoursI, salesI } = resolveCalloutMainColumns(headers);
-  const thead =
-    '<tr><th>Name</th><th>Manager</th><th class="num">Hours lost</th><th>Sales group</th></tr>';
+  const { nameI, managerI, hoursI, salesI, infractions30dI } = resolveCalloutMainColumns(headers);
+  const infThTitle = escapeAttr('# of infractions within 30d');
+  const thead = `<tr><th>Name</th><th>Manager</th><th class="num">Hours lost</th><th>Sales group</th><th class="num callout-infractions-th" title="${infThTitle}"># infractions<br>(30d)</th></tr>`;
   const body = rows
     .slice(0, 40)
     .map((r) => {
@@ -1727,10 +1752,12 @@ function htmlCalloutMainPreview(headers, rows) {
       const mgr = managerI >= 0 ? stripCalloutDisplayHandle(r[managerI]) : '—';
       const hrs = hoursI >= 0 ? formatCalloutHoursLostCell(r[hoursI]) : '—';
       const sg = salesI >= 0 ? String(r[salesI] ?? '').trim() : '—';
-      return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(mgr)}</td><td class="num">${escapeHtml(hrs)}</td><td>${escapeHtml(sg)}</td></tr>`;
+      const inf =
+        infractions30dI >= 0 ? formatCalloutInfractions30dCell(r[infractions30dI]) : '—';
+      return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(mgr)}</td><td class="num">${escapeHtml(hrs)}</td><td>${escapeHtml(sg)}</td><td class="num">${escapeHtml(inf)}</td></tr>`;
     })
     .join('');
-  return `<div class="preview-table-wrap"><table class="preview-table callout-main-preview-table"><thead>${thead}</thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="preview-table-wrap callout-main-table-wrap"><table class="preview-table callout-main-preview-table"><thead>${thead}</thead><tbody>${body}</tbody></table></div>`;
 }
 
 /** Full-width card: call-out (left) + Overtime Stats (right). */
@@ -3006,6 +3033,42 @@ function tickClock() {
 
 tickClock();
 setInterval(tickClock, 1000);
+
+const THEME_STORAGE_KEY = 'staffing-dash-theme';
+
+function getUiTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+function syncThemeToggleUi() {
+  const btn = document.getElementById('btn-theme-toggle');
+  if (!btn) return;
+  const dark = getUiTheme() === 'dark';
+  btn.textContent = dark ? 'Light mode' : 'Dark mode';
+  btn.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+}
+
+function setUiTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, t);
+  } catch (_) {
+    /* storage blocked */
+  }
+  syncThemeToggleUi();
+}
+
+function initThemeToggle() {
+  const btn = document.getElementById('btn-theme-toggle');
+  if (!btn) return;
+  syncThemeToggleUi();
+  btn.addEventListener('click', () => {
+    setUiTheme(getUiTheme() === 'dark' ? 'light' : 'dark');
+  });
+}
+
+initThemeToggle();
 
 document.getElementById('btn-refresh').addEventListener('click', () => loadDashboard());
 document.getElementById('btn-ai-brief-refresh')?.addEventListener('click', () => {

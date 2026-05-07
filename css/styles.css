@@ -36,6 +36,43 @@
   --font-mono: 'IBM Plex Mono', 'Courier New', monospace;
   /** Whole-dashboard visual scale (see `.dash-root`) */
   --dash-zoom: 0.91;
+  --header-bg: var(--navy);
+  --panel-surface: #ffffff;
+  --input-surface: #ffffff;
+  --preview-surface: #faf9f7;
+  --chat-msg-bg: #ffffff;
+  --btn-on-primary: #ffffff;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --cream: #0d1118;
+  --cream-alt: #161d28;
+  --text-pri: #e8edf4;
+  --text-sec: #8b9bb8;
+  --text-inv: #f2f6fc;
+  --border: #2a3548;
+  --border-str: #3d4e68;
+  --navy: #0e1b2e;
+  --navy-soft: #a8b8d4;
+  --header-bg: #070b11;
+  --panel-surface: #131b26;
+  --input-surface: #1a2433;
+  --preview-surface: #0f151e;
+  --chat-msg-bg: #1a2433;
+  --btn-on-primary: #f4f7fb;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --green-bg: rgba(52, 211, 153, 0.12);
+  --green-pos-bg: rgba(45, 212, 191, 0.12);
+  --red-bg: rgba(248, 113, 113, 0.14);
+  --amber-bg: rgba(251, 191, 36, 0.14);
+  --yellow-over-bg: rgba(74, 222, 128, 0.16);
+  --yellow-over-fg: #ecfdf5;
+  --green-over-max-bg: #1e3d34;
+  --green-over-max-fg: #ecfdf5;
+  --idle-orange-bg: rgba(251, 146, 60, 0.14);
+  --idle-orange-fg: #fdba74;
 }
 
 *,
@@ -65,7 +102,7 @@ body {
 }
 
 .app-header {
-  background: var(--navy);
+  background: var(--header-bg);
   color: var(--text-inv);
   padding: 0 24px;
   display: flex;
@@ -99,7 +136,7 @@ body {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--cream);
+  color: var(--text-inv);
 }
 .header-divider {
   width: 1px;
@@ -117,8 +154,26 @@ body {
   color: rgba(247, 244, 239, 0.7);
 }
 
+.header-theme-toggle {
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 7px 12px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(247, 244, 239, 0.92);
+  cursor: pointer;
+}
+.header-theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
 .toolbar {
-  background: #fff;
+  background: var(--panel-surface);
   border-bottom: 1px solid var(--border);
   padding: 10px 24px;
   display: flex;
@@ -147,7 +202,7 @@ body {
   border: 1px solid var(--border-str);
   border-radius: var(--radius);
   color: var(--text-pri);
-  background: #fff;
+  background: var(--input-surface);
 }
 .toolbar-historical-badge {
   font-size: 11px;
@@ -168,7 +223,7 @@ body {
   padding: 6px 14px;
   border: 1px solid var(--border-str);
   background: var(--navy);
-  color: #fff;
+  color: var(--btn-on-primary);
   cursor: pointer;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -185,7 +240,7 @@ body {
 
 /* Slim staffing assistant (below toolbar) */
 .staffing-chat-bar-wrap {
-  background: #fff;
+  background: var(--panel-surface);
   border-bottom: 1px solid var(--border);
   padding: 8px 24px 10px;
   box-shadow: var(--shadow-sm);
@@ -216,7 +271,7 @@ body {
   font-size: 13px;
   font-family: var(--font-sans);
   color: var(--text-pri);
-  background: #fff;
+  background: var(--input-surface);
 }
 .staffing-chat-bar-btn {
   flex: 0 0 auto;
@@ -487,6 +542,60 @@ body {
 .callout-ot-split {
   margin-top: 4px;
 }
+
+#panel-callout-ot .idle-split-col:first-child .callout-main-table-wrap {
+  width: 100%;
+  margin-top: 8px;
+}
+#panel-callout-ot .callout-main-preview-table {
+  width: 100%;
+  max-width: none;
+  table-layout: fixed;
+  margin-top: 0;
+}
+#panel-callout-ot .callout-main-preview-table th,
+#panel-callout-ot .callout-main-preview-table td {
+  max-width: none;
+}
+#panel-callout-ot .callout-main-preview-table td:nth-child(1),
+#panel-callout-ot .callout-main-preview-table td:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#panel-callout-ot .callout-main-preview-table th:nth-child(3),
+#panel-callout-ot .callout-main-preview-table td:nth-child(3),
+#panel-callout-ot .callout-main-preview-table th:nth-child(5),
+#panel-callout-ot .callout-main-preview-table td:nth-child(5) {
+  white-space: nowrap;
+}
+#panel-callout-ot .callout-main-preview-table .callout-infractions-th {
+  white-space: normal;
+  line-height: 1.25;
+  font-size: 9px;
+  vertical-align: bottom;
+  font-weight: 600;
+}
+#panel-callout-ot .callout-main-preview-table th:nth-child(1),
+#panel-callout-ot .callout-main-preview-table td:nth-child(1) {
+  width: 22%;
+}
+#panel-callout-ot .callout-main-preview-table th:nth-child(2),
+#panel-callout-ot .callout-main-preview-table td:nth-child(2) {
+  width: 22%;
+}
+#panel-callout-ot .callout-main-preview-table th:nth-child(3),
+#panel-callout-ot .callout-main-preview-table td:nth-child(3) {
+  width: 11%;
+}
+#panel-callout-ot .callout-main-preview-table th:nth-child(4),
+#panel-callout-ot .callout-main-preview-table td:nth-child(4) {
+  width: 20%;
+}
+#panel-callout-ot .callout-main-preview-table th:nth-child(5),
+#panel-callout-ot .callout-main-preview-table td:nth-child(5) {
+  width: 25%;
+}
 .bobbot-reachout-list {
   margin: 8px 0 0 16px;
   padding: 0;
@@ -726,7 +835,7 @@ body {
 }
 
 .panel-card {
-  background: #fff;
+  background: var(--panel-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-md);
@@ -906,7 +1015,7 @@ a.digest-link {
 }
 
 .freshness-strip {
-  background: #fff;
+  background: var(--panel-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 10px 14px;
@@ -928,7 +1037,7 @@ a.digest-link {
 }
 
 .heatmap-card {
-  background: #fff;
+  background: var(--panel-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-md);
@@ -1091,7 +1200,7 @@ a.digest-link {
   overflow-y: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: #faf9f7;
+  background: var(--preview-surface);
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1414,8 +1523,8 @@ table.rollup-table tfoot tr.rollup-sum-row td {
   text-align: right;
 }
 .btn.btn-secondary {
-  background: #fff;
-  color: var(--navy);
+  background: var(--panel-surface);
+  color: var(--text-pri);
 }
 .btn.btn-secondary:hover {
   background: var(--cream-alt);
@@ -1449,7 +1558,7 @@ table.rollup-table tfoot tr.rollup-sum-row td {
   margin-bottom: 12px;
   padding: 10px 12px;
   border-radius: var(--radius);
-  background: #fff;
+  background: var(--chat-msg-bg);
   border: 1px solid var(--border);
 }
 .staffing-chat-msg:last-child {
@@ -1485,8 +1594,8 @@ table.rollup-table tfoot tr.rollup-sum-row td {
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-str);
-  background: #fff;
-  color: var(--navy);
+  background: var(--panel-surface);
+  color: var(--text-pri);
   cursor: pointer;
   font-family: var(--font-sans);
 }

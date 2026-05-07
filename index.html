@@ -1,10 +1,22 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staffing Health Dashboard</title>
-  <link rel="stylesheet" href="css/styles.css?v=74" />
+  <script>
+    (function () {
+      try {
+        var k = 'staffing-dash-theme';
+        var v = localStorage.getItem(k);
+        var t = v === 'light' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="css/styles.css?v=76" />
 </head>
 <body>
   <div class="dash-root">
@@ -15,6 +27,14 @@
     </div>
     <div class="header-divider" aria-hidden="true"></div>
     <span class="header-subtitle">Consumer Sales · Workforce staffing health</span>
+    <button
+      type="button"
+      class="header-theme-toggle"
+      id="btn-theme-toggle"
+      aria-label="Switch to light mode"
+    >
+      Light mode
+    </button>
     <span class="header-clock" id="header-clock" aria-live="polite"></span>
   </header>
 
@@ -168,6 +188,6 @@
   </main>
   </div>
 
-  <script type="module" src="js/app.js?v=95"></script>
+  <script type="module" src="js/app.js?v=97"></script>
 </body>
 </html>
