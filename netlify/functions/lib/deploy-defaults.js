@@ -22,6 +22,8 @@ const DEFAULTS = {
   SPEED_TO_LEAD_CACHE_SECONDS: '180',
   /** Drop STL rows above this many minutes from avg/median (long-tail / bad timestamps). */
   SPEED_TO_LEAD_SUMMARY_CAP_MINUTES: '1440',
+  /** Intraday STL rollups omit lead-hour buckets before this CT clock hour (0–23). */
+  SPEED_TO_LEAD_REPORTING_DAY_START_HOUR_CT: '7',
   ADHERENCE_SPREADSHEET_ID: '16OLaJrpyNHzh9Oqd5GV3JdSx0YJeyu8a4qD38WTpcgU',
   ADHERENCE_ALERTS_TAB: 'Adherence_Alert_Log',
   /** Live Floor tab — current OOA rows for dashboard list (Name, Flex State, Adherence). */

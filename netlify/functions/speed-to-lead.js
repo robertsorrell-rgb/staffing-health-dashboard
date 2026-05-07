@@ -41,6 +41,14 @@ function salesGroupColumnIndex(headers) {
   return -1;
 }
 
+/** Clock hour (CT) when intraday STL reporting starts; buckets before this are omitted when an hour column exists. */
+function reportingDayStartHourCt() {
+  const raw = env('SPEED_TO_LEAD_REPORTING_DAY_START_HOUR_CT');
+  const n = parseInt(String(raw || '').trim(), 10);
+  if (Number.isFinite(n) && n >= 0 && n <= 23) return n;
+  return 7;
+}
+
 /** Omit from dual STL tables (last hour / today): unknown bucket + training cohort noise. */
 function excludeFromStlDualPanelGroup(group) {
   const g = String(group ?? '').trim().replace(/\s+/g, ' ');
@@ -381,6 +389,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
 
   const sgCol = salesGroupColumnIndex(headers);
   const hrCol = hourBucketColumnIndex(headers);
+  const reportingStartHour = hrCol >= 0 ? reportingDayStartHourCt() : null;
 
   if (speedCol < 0) {
     const fieldList =
@@ -428,12 +437,19 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
   /** @type {Map<string, { hour_sort: number, hour_label: string, group: string, sum: number, values: number[] }>} */
   const byHourGroup = new Map();
   let excludedAboveCap = 0;
+  let excludedBeforeReportingHour = 0;
 
   for (const row of rows) {
     const mins = speedValueAsMinutes(row[speedCol], headers[speedCol]);
     if (mins == null || mins < 0 || mins > MAX_MIN) continue;
     if (mins > summaryCapMin) {
       excludedAboveCap += 1;
+      continue;
+    }
+    let rowHour = null;
+    if (hrCol >= 0) rowHour = hourOfDayFromCell(row[hrCol]);
+    if (reportingStartHour != null && rowHour != null && rowHour < reportingStartHour) {
+      excludedBeforeReportingHour += 1;
       continue;
     }
     minutesList.push(mins);
@@ -444,7 +460,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
     byGroup.set(g, curG);
 
     if (hrCol >= 0) {
-      const hourNum = hourOfDayFromCell(row[hrCol]);
+      const hourNum = rowHour;
       if (hourNum != null) {
         const hl = String(hourNum).padStart(2, '0');
         const curH = byHour.get(hl) || { sum: 0, values: [] };
@@ -541,7 +557,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
       if (mins == null || mins < 0 || mins > MAX_MIN) continue;
       if (mins > summaryCapMin) continue;
       const h = hourOfDayFromCell(row[hrCol]);
-      if (h == null) continue;
+      if (h == null || h < reportingStartHour) continue;
       if (latestHour == null || h > latestHour) latestHour = h;
     }
 
@@ -681,6 +697,9 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
             summary_cap_minutes: summaryCapMin,
           }
         : {}),
+      ...(excludedBeforeReportingHour > 0
+        ? { rows_excluded_before_reporting_hour: excludedBeforeReportingHour }
+        : {}),
     },
     by_sales_group: by_sales_group.slice(0, 32),
     by_hour: by_hour.slice(0, 48),
@@ -702,6 +721,7 @@ function buildSpeedToLeadPayload(headers, rows, today, ctx) {
             : {}),
         }
       : {}),
+    ...(reportingStartHour != null ? { stl_reporting_day_start_hour_ct: reportingStartHour } : {}),
     ...exploreBit,
   };
 }

@@ -1069,7 +1069,11 @@ function formatStlDuration(m) {
 }
 
 /** Third column: hourly STL sparklines (mounted after innerHTML). */
-function htmlStlSparkColumnMount(todayGroups) {
+function htmlStlSparkColumnMount(todayGroups, reportingHourCt = null) {
+  const hrHint =
+    reportingHourCt != null && Number.isFinite(Number(reportingHourCt))
+      ? ` Lead-hour buckets before ${formatSparklineHour12(Number(reportingHourCt))} CT excluded.`
+      : '';
   const rows = todayGroups
     .map(
       (g, i) =>
@@ -1082,7 +1086,7 @@ function htmlStlSparkColumnMount(todayGroups) {
     .join('');
   return `<div class="stl-breakdown-col stl-spark-col">
     <div class="panel-sub stl-split-heading">Today · hourly trend</div>
-    <p class="panel-muted stl-day-bars-hint">Shared CT hour axis &amp; Y scale; lines like idle (slower = warmer). Chart top = <strong class="stl-spark-y-max-slot">—</strong>.</p>
+    <p class="panel-muted stl-day-bars-hint">Shared CT hour axis &amp; Y scale; lines like idle (slower = warmer). Chart top = <strong class="stl-spark-y-max-slot">—</strong>.${hrHint}</p>
     <div class="stl-spark-rows">${rows}</div>
     <div class="stl-spark-shared-axis" aria-hidden="true"></div>
   </div>`;
@@ -2500,7 +2504,13 @@ function renderSpeedToLeadPanel(data, errMsg) {
           : '';
   const srcBit = src ? ` · ${src}` : '';
   const col = data.speed_column_used ? ` · ${data.speed_column_used}` : '';
-  const baseMeta = `Today (CT): ${sum.rows_with_valid_minutes ?? 0} leads with minutes / ${sum.rows_today ?? 0} rows${col}${srcBit}.`;
+  const reportHr =
+    data.stl_reporting_day_start_hour_ct != null && Number.isFinite(Number(data.stl_reporting_day_start_hour_ct))
+      ? Number(data.stl_reporting_day_start_hour_ct)
+      : null;
+  const rollupWindow =
+    reportHr != null ? ` STL rollups use lead-hour buckets from ${formatSparklineHour12(reportHr)} CT onward.` : '';
+  const baseMeta = `Today (CT): ${sum.rows_with_valid_minutes ?? 0} leads with minutes / ${sum.rows_today ?? 0} rows${col}${srcBit}.${rollupWindow}`;
   const explore = data.looker_explore_url;
   if (explore && /^https?:\/\//i.test(String(explore))) {
     meta.innerHTML = `${escapeHtml(baseMeta)} <a class="digest-link stl-looker-link" href="${escapeAttr(explore)}" target="_blank" rel="noopener noreferrer">Open in Looker →</a>`;
@@ -2512,16 +2522,23 @@ function renderSpeedToLeadPanel(data, errMsg) {
     ? `<p class="panel-muted" style="margin-top:8px;line-height:1.4;">${escapeHtml(data.note)}</p>`
     : '';
 
-  const capNote =
+  const capLong =
     sum.rows_excluded_above_cap > 0 && sum.summary_cap_minutes != null
       ? `<p class="panel-muted" style="margin-top:8px;">${escapeHtml(String(sum.rows_excluded_above_cap))} lead(s) over ${escapeHtml(String(sum.summary_cap_minutes))} min omitted from rollups (tables &amp; hourly trend).</p>`
       : '';
+  const capOvernight =
+    sum.rows_excluded_before_reporting_hour > 0 && reportHr != null
+      ? `<p class="panel-muted" style="margin-top:8px;">${escapeHtml(String(sum.rows_excluded_before_reporting_hour))} lead(s) with lead-hour before ${escapeHtml(formatSparklineHour12(reportHr))} CT omitted from STL rollups.</p>`
+      : '';
+  const capNote = capLong + capOvernight;
 
   const lastHour = data.stl_last_hour_by_group;
   const todayGroups = data.stl_today_by_group;
   let breakdown = '';
 
   if (Array.isArray(lastHour) && Array.isArray(todayGroups) && lastHour.length && todayGroups.length) {
+    const todayHead =
+      reportHr != null ? `Today (CT) · from ${formatSparklineHour12(reportHr)}` : 'Today (CT) · all day';
     const hourTitle = data.stl_last_hour_label
       ? `Last hour · ${data.stl_last_hour_label}`
       : 'Last hour';
@@ -2538,10 +2555,10 @@ function renderSpeedToLeadPanel(data, errMsg) {
         <div class="preview-table-wrap"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Speed to lead</th></tr></thead><tbody>${rowHtml(lastHour)}</tbody></table></div>
       </div>
       <div class="stl-breakdown-col">
-        <div class="panel-sub stl-split-heading">Today (CT) · all day</div>
+        <div class="panel-sub stl-split-heading">${escapeHtml(todayHead)}</div>
         <div class="preview-table-wrap"><table class="preview-table stl-breakdown-table"><thead><tr><th>Sales group / queue</th><th class="num">Leads</th><th class="num">Speed to lead</th></tr></thead><tbody>${rowHtml(todayGroups)}</tbody></table></div>
       </div>
-      ${htmlStlSparkColumnMount(todayGroups)}
+      ${htmlStlSparkColumnMount(todayGroups, reportHr)}
     </div>`;
   } else {
     const byHourGroup = data.by_hour_sales_group || [];
