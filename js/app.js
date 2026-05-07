@@ -145,11 +145,6 @@ const BOBBOT_REACHOUT_START_HOUR_CT = 11;
 
 /** Recommend reach-out when blended idle % for mapped groups is at least this (full day, CT sheet date). */
 const BOBBOT_REACHOUT_IDLE_MIN_PCT = 40;
-const PREVIEW_CALLOUT = {
-  preferred: ['timestamp', 'agent', 'name', 'manager', 'queue', 'reason', 'status', 'date'],
-  skip: [],
-  maxCols: 6,
-};
 
 /** Sheet group names → one dashboard row (simple mean of listed %); CSR omitted. */
 const IDLE_MERGE_SPECS = [
@@ -1653,12 +1648,97 @@ function htmlOtFillColumn(ot, otErr) {
   return `${inner}`;
 }
 
+/** Strip leading @ from Slack-style handles in call-out cells. */
+function stripCalloutDisplayHandle(cell) {
+  const t = String(cell ?? '').trim();
+  return t.startsWith('@') ? t.slice(1).trim() : t;
+}
+
+/**
+ * Call-out main flow sheet: column indices for dashboard preview.
+ * @returns {{ nameI: number, managerI: number, hoursI: number, salesI: number }}
+ */
+function resolveCalloutMainColumns(headers) {
+  const lower = headers.map((h) => String(h || '').trim().toLowerCase());
+  const used = new Set();
+
+  const takeFirst = (pred) => {
+    for (let i = 0; i < lower.length; i++) {
+      if (used.has(i)) continue;
+      const h = lower[i];
+      if (pred(h)) {
+        used.add(i);
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  let nameI = takeFirst((h) => h === 'agent name' || (h.includes('agent') && h.includes('name')));
+  if (nameI < 0) nameI = takeFirst((h) => h === 'agent' || h === 'username' || /\bslack\b/.test(h));
+  if (nameI < 0) nameI = takeFirst((h) => (h === 'name' || h.endsWith(' name')) && !h.includes('manager'));
+
+  let managerI = takeFirst((h) => h === 'manager' || h.includes('manager'));
+  if (managerI < 0) managerI = takeFirst((h) => h.includes('supervisor'));
+
+  let hoursI = takeFirst(
+    (h) =>
+      /\btotal\s*shift\s*length\b/.test(h) ||
+      (/\btotal\b/.test(h) && h.includes('shift') && h.includes('length'))
+  );
+  if (hoursI < 0) {
+    hoursI = takeFirst(
+      (h) =>
+        /\bhours\s*lost\b/.test(h) ||
+        (h.includes('shift') && h.includes('length') && !h.includes('start') && !h.includes('end'))
+    );
+  }
+  if (hoursI < 0) hoursI = takeFirst((h) => /^duration\b/.test(h) || h === 'total hours');
+
+  let salesI = takeFirst((h) => h === 'sales group' || h.includes('sales group') || h === 'sales_group');
+  if (salesI < 0) salesI = takeFirst((h) => h === 'queue');
+
+  return { nameI, managerI, hoursI, salesI };
+}
+
+function formatCalloutHoursLostCell(cell) {
+  if (cell == null || cell === '') return '—';
+  const raw = String(cell).trim();
+  const n = Number(raw.replace(/,/g, ''));
+  if (Number.isFinite(n)) {
+    const rounded = Math.round(n * 100) / 100;
+    if (Number.isInteger(rounded)) return String(rounded);
+    return String(rounded).replace(/\.?0+$/, '');
+  }
+  return raw || '—';
+}
+
+/** Fixed layout: Name · Manager · Hours lost · Sales group (no timestamp/reason). */
+function htmlCalloutMainPreview(headers, rows) {
+  if (!headers?.length) return '<p class="panel-muted">No headers</p>';
+  if (!rows?.length) return '';
+  const { nameI, managerI, hoursI, salesI } = resolveCalloutMainColumns(headers);
+  const thead =
+    '<tr><th>Name</th><th>Manager</th><th class="num">Hours lost</th><th>Sales group</th></tr>';
+  const body = rows
+    .slice(0, 40)
+    .map((r) => {
+      const name = nameI >= 0 ? stripCalloutDisplayHandle(r[nameI]) : '—';
+      const mgr = managerI >= 0 ? stripCalloutDisplayHandle(r[managerI]) : '—';
+      const hrs = hoursI >= 0 ? formatCalloutHoursLostCell(r[hoursI]) : '—';
+      const sg = salesI >= 0 ? String(r[salesI] ?? '').trim() : '—';
+      return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(mgr)}</td><td class="num">${escapeHtml(hrs)}</td><td>${escapeHtml(sg)}</td></tr>`;
+    })
+    .join('');
+  return `<div class="preview-table-wrap"><table class="preview-table callout-main-preview-table"><thead>${thead}</thead><tbody>${body}</tbody></table></div>`;
+}
+
 /** Full-width card: call-out (left) + Overtime Stats (right). */
 function calloutOtSplitPanel(co, coErr, ot, otErr) {
   const hasPreviewRows = !!(co.call_out_main?.rows_preview?.length);
   const prev =
     co.call_out_main?.headers && hasPreviewRows
-      ? tablePreviewPick(co.call_out_main.headers, co.call_out_main.rows_preview, PREVIEW_CALLOUT)
+      ? htmlCalloutMainPreview(co.call_out_main.headers, co.call_out_main.rows_preview)
       : '';
   const coRows =
     (co.call_out_main?.rows_today ?? 0) + (co.attendance_notifications?.rows_today ?? 0);
