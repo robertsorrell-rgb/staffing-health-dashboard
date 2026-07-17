@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Pitstop — Workforce management cockpit for contact center managers",
+  "description": "Pitstop — Manager schedule change requests for consultants",
   "engines": {
     "node": ">=20.0.0"
   },

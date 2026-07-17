@@ -1,11 +1,156 @@
 /*************************************************************
- * TARGETED VTO BOT v1.9.7
+ * TARGETED VTO BOT v1.11.3
  * Mirrors the VTO engine pattern exactly:
  *   1. Poll Assembled net staffing
  *   2. Find surplus windows (net >= threshold) — VTO opportunity
  *   3. Match eligible reps (right queue + scheduled + not on no-fly)
- *   4. Send email with Accept / Decline links
+ *   4. Send offer via email and/or Slack DM (Accept / Decline links)
  *   5. doGet handles response -> writes VTO activity to Assembled
+ *
+ * CHANGELOG v1.11.3
+ *   - FIX: Week/bundle headroom pre-deducted active WEEK_VTO offers on every surplus
+ *     interval in the map, even when the offer was for a different calendar day (e.g.
+ *     SENT bundle rows for 6/16–6/18 drained 6/19 headroom for reps still scheduled
+ *     that day). rvtoBuildHeadroomMap_ now uses rvtoWeekBlockOfferDayKeys_() so each
+ *     outstanding offer only reduces net on the day(s) it actually covers. Symptom:
+ *     large queues (College) showed Assembled surplus but zero bundle sends after a
+ *     multi-day PICK_DATES campaign.
+ *   - College queue workGroupPattern adds Col-STEM and College and Grad aliases.
+ *   - Bundle runs log WEEK_BLOCK_BUNDLE_QUEUE_SUMMARY when a queue has eligible reps
+ *     but sends zero bundles (points to Audit headroom/eligibility rows).
+ *
+ * CHANGELOG v1.11.2
+ *   - FIX: Accept/Decline web app ("Offer not found") — all sheet reads/writes now use
+ *     rvtoGetSpreadsheet_() (SpreadsheetApp.openById via Script Property RVTO_SPREADSHEET_ID)
+ *     instead of SpreadsheetApp.getActive(), which is unreliable in headless doGet runs.
+ *     setupRvtoWorkbook() auto-sets RVTO_SPREADSHEET_ID when run from the bound workbook.
+ *
+ * CHANGELOG v1.11.0
+ *   - NEW: Rep-facing Slack VTO offers. Config VTO_OFFER_CHANNEL: EMAIL (default),
+ *     SLACK, or BOTH. Slack DMs use the same web-app Accept/Decline URLs as email,
+ *     with mrkdwn links ("I'll take it!" / "No thanks"). Requires SLACK_BOT_TOKEN.
+ *     VTO_SLACK_FALLBACK_EMAIL (default TRUE): when channel is SLACK and lookup/DM
+ *     fails, fall back to Gmail. COPY_ONLY preview sends Slack preview to the operator
+ *     address (users.lookupByEmail) without DMing the rep. Applies to intraday,
+ *     week-block, and bundle sends via rvtoDeliver*Offer_ helpers.
+ *
+ * CHANGELOG v1.10.10
+ *   - NEW: Config INDIVIDUAL_DAY_VTO_ENABLED + INDIVIDUAL_DAY_VTO_TARGET_DATE (yyyy-MM-dd).
+ *     When TRUE, the manual menu run targets that single calendar day: Assembled schedule
+ *     and surplus pull span only that day (same engine as legacy WEEK_BLOCK). You can leave
+ *     WEEK_VTO_ENABLED FALSE and use only these two rows for a one-day campaign; if both
+ *     are on, individual-day settings take precedence over WEEK_VTO_CAMPAIGN_MODE / dates.
+ *
+ * CHANGELOG v1.10.9
+ *   - PGC: when PGC_SPREADSHEET_ID points at a different file and that load yields 0 usable
+ *     rows, rvtoLoadPgcMap_ merges from the bound workbook's "PGC" tab (same as operators
+ *     who keep IMPORTRANGE there). Audit src tag active_workbook_merged. Clear external ID
+ *     if you want only the bound sheet.
+ *
+ * CHANGELOG v1.10.8
+ *   - PGC: rvtoLoadPgcMap_ retries the "PGC" tab when the first chosen sheet yields 0
+ *     usable name/value rows (e.g. PGC_SHEET_NAME=Data empty but PGC has IMPORTRANGE).
+ *     If the map is still empty while USE_PGC_PRIORITY or PGC_OFFER_CEILING expects data,
+ *     PGC_LOAD is WARN with guidance (ceiling/sort have no effect until rows load).
+ *
+ * CHANGELOG v1.10.7
+ *   - NEW: Config WEEK_VTO_MAX_SENDS_PER_QUEUE (0/blank = unlimited). Caps how many
+ *     week-block or bundle emails a single queue may send in one menu run, after
+ *     eligibility/headroom/caps — stops “everyone in ELD” when many reps qualify.
+ *
+ * CHANGELOG v1.10.6
+ *   - PGC: when Script Property PGC_SPREADSHEET_ID is blank, rvtoLoadPgcMap_ now uses
+ *     the active (bound) spreadsheet. When PGC_SHEET_NAME is also blank and the file
+ *     is that active workbook, the "PGC" tab is used if present (else first tab).
+ *     External Looker exports still set PGC_SPREADSHEET_ID explicitly; optional PGC_SHEET_NAME.
+ *
+ * CHANGELOG v1.10.5
+ *   - NEW: Config RAMP_NET_BOOST_ENABLED (default TRUE). When FALSE, Ramp_Inclusion
+ *     does not add FTE to Assembled net for surplus detection (intraday + week/bundle),
+ *     so surplus windows align with raw forecasted_vs_actuals / Staffing timeline.
+ *     When TRUE, behavior unchanged: net = API net + per-queue ramp share.
+ *
+ * CHANGELOG v1.10.4
+ *   - PGC sheet layout: default columns are A = rep name, B = pGC (Google % format).
+ *     Legacy Looker export (name col B, PGC col G): set Script Properties
+ *     PGC_NAME_COLUMN=2 and PGC_VALUE_COLUMN=7.
+ *
+ * CHANGELOG v1.10.3
+ *   - NEW: PGC_OFFER_CEILING — optional max PGC (same scale as Looker PGC sheet)
+ *     for VTO eligibility. Reps with a numeric PGC row strictly above the ceiling
+ *     are excluded from intraday and week/bundle eligibility; reps with no PGC row
+ *     still qualify. rvtoLoadPgcMap_ runs when ceiling is set even if
+ *     USE_PGC_PRIORITY is FALSE so the filter has data.
+ *
+ * CHANGELOG v1.10.2
+ *   - Config tab trimmed: QUEUE_DEFS now Consumer Sales queues only (Support
+ *     site queues removed for this deployment). Dropped unused PAGE_LIMIT row
+ *     and ASSEMBLED_SITE_SUPPORT (no Support queues in code). Setup Workbook
+ *     Notes column rewritten in plain language for operators.
+ *
+ * CHANGELOG v1.10.1
+ *   - NEW: Offer preview for operators — Config VTO_OFFER_PREVIEW_EMAIL plus
+ *     VTO_OFFER_PREVIEW_MODE (BCC or COPY_ONLY). Every outbound offer email
+ *     (intraday day-of, week-block full range, bundle multi-day) uses the same
+ *     helper: BCC sends the real rep email with you on BCC; COPY_ONLY sends
+ *     only to the preview address with a yellow banner and subject tag so you
+ *     see the exact HTML/links without emailing the rep (Accept/Decline still
+ *     bind to the rep&rsquo;s row). Blank preview email disables the feature.
+ *
+ * CHANGELOG v1.10.0
+ *   - NEW: Week VTO "bundle" campaign mode — one email listing multiple
+ *     optional VTO days, each with its own Accept / Decline links (separate
+ *     Offer rows + tokens). Config WEEK_VTO_CAMPAIGN_MODE: WEEK_BLOCK
+ *     (legacy single full-range offer), PICK_DATES (comma list in
+ *     WEEK_VTO_PICK_DATES), or DOW_IN_RANGE (WEEK_VTO_START_DATE /
+ *     WEEK_VTO_END_DATE + WEEK_VTO_TARGET_DOW 1=Mon..7=Sun). Reuses surplus
+ *     polling, eligibility, headroom, per-day dedup, and week-block commit.
+ *     Bundle sends count once toward MAX_OFFERS_PER_PERSON_PER_DAY,
+ *     MAX_EMAILS_PER_24H, and OFFER_MIN_GAP_HOURS (by Sent At day in
+ *     America/Chicago). Per-day DECLINED does not trigger the hard 24h
+ *     decline freeze (v1.8.0) so other days in the same bundle remain usable.
+ *
+ * CHANGELOG v1.9.9
+ *   - FIX: v1.9.8's cross-run week-block dedup missed all EXPIRED prior
+ *     offers because rvtoHasPriorWeekBlockOffer_() identified week-block
+ *     rows by looking for "WEEK_VTO" in the Notes column — but
+ *     expireRvtoOffers_() overwrites Notes with "Expired after hold window."
+ *     when an offer expires, erasing the tag. Result: a fresh campaign for
+ *     2026-05-24 to 2026-05-30 re-offered the same week to Matthew McCarthy,
+ *     Tonia Turner, and David Iradji whose prior 5/7 offers had all
+ *     EXPIRED and lost their WEEK_VTO tag in Notes.
+ *
+ *     Two changes:
+ *
+ *     1. rvtoHasPriorWeekBlockOffer_() now identifies week-block rows by
+ *        Offer ID prefix (RVTO_APP.WEEK_BLOCK_PREFIX, "RVTO_WK") in addition
+ *        to the Notes tag. The Offer ID is immutable and matches what
+ *        doGet() already uses to route week-block responses, so dedup is
+ *        now robust against Notes clobbering.
+ *
+ *     2. expireRvtoOffers_() now APPENDS " | Expired after hold window."
+ *        to the existing Notes value instead of overwriting it. The
+ *        WEEK_VTO tag, Days: list, and Blocks: schedule survive expiry,
+ *        so any downstream tooling that reads expired rows (weekly
+ *        summary, audits, future operator reviews) keeps working.
+ *
+ * CHANGELOG v1.9.8
+ *   - FIX: Week-block VTO had no cross-run de-dup for prior offers. A rep
+ *     who received a week-block offer that subsequently EXPIRED (or SENT
+ *     with no response, DECLINED, ACCEPTED, COMMITTED) would still be
+ *     re-offered the same week on a later run because rvtoBuildOfferHistory_
+ *     explicitly skips WEEK_VTO rows from the cap tracker, and
+ *     weekBlockSentThisRun only de-dups within a single execution.
+ *     Running back-to-back campaigns for overlapping weeks therefore
+ *     duplicated offers to the same reps.
+ *
+ *     New helper rvtoHasPriorWeekBlockOffer_() scans ctx.offerObjects for
+ *     any prior WEEK_VTO row for the rep whose date range overlaps the
+ *     new target range. Skips the rep when found, with a
+ *     WEEK_BLOCK_DUPLICATE_SKIP audit row that logs the prior offer ID,
+ *     prior date range, and prior status so operators can see why the rep
+ *     was filtered. SEND_FAILED and blank-status rows are ignored (those
+ *     represent failed deliveries — the rep never actually got the offer).
  *
  * CHANGELOG v1.9.7
  *   - FIX: Week-block headroom gate was conflating MIN_SURPLUS (used to
@@ -235,8 +380,9 @@
  *
  * CHANGELOG v1.6.4
  *   - PGC priority layer: daily PGC % from an external Google Sheet
- *     (Script Properties only: PGC_SPREADSHEET_ID; optional PGC_SHEET_NAME).
- *     Column B = rep name, column G = PGC. Among eligible reps, those
+ *     (Script Properties only: PGC_SPREADSHEET_ID; optional PGC_SHEET_NAME;
+ *     optional PGC_NAME_COLUMN / PGC_VALUE_COLUMN as 1-based column numbers,
+ *     default 1 and 2 = columns A and B). Among eligible reps, those
  *     with no matching PGC row are sorted first; then lowest PGC first.
  *     Toggle via Config USE_PGC_PRIORITY (default TRUE).
  *   - rvtoLoadPgcMap_(), rvtoParsePgcValue_(), rvtoSortEligibleByPgc_().
@@ -387,9 +533,12 @@
  *   2. Set Script Properties:
  *        ASSEMBLED_API_KEY
  *        RVTO_WEB_APP_URL
+ *        RVTO_SPREADSHEET_ID (auto-set when you run Setup Workbook from this file; required for web app)
  *        ASSEMBLED_VTO_ACTIVITY_ID
- *        PGC_SPREADSHEET_ID (Looker PGC sheet — column B name, G = PGC)
- *        PGC_SHEET_NAME (optional tab name; omit = first sheet)
+ *        PGC_SPREADSHEET_ID (optional if PGC tab is in this workbook — then omit;
+ *          otherwise external Looker sheet id). PGC_SHEET_NAME (optional; default
+ *          for this workbook is tab "PGC"). PGC_NAME_COLUMN / PGC_VALUE_COLUMN (optional 1-based; default 1 and 2;
+ *          use 2 and 7 for legacy Looker B+G layout)
  *   3. Populate the Roster sheet
  *   4. Deploy as web app (execute as: me, anyone can access)
  *   5. Set a time-based trigger on runReverseVto() (e.g. every 10 min)
@@ -399,7 +548,7 @@
  * CONSTANTS
  *************************************************************/
 const RVTO_APP = {
-  VERSION: 'V1.9.7',
+  VERSION: 'V1.11.3',
   BASE_URL: 'https://api.assembledhq.com/v0',
 
   SHEETS: {
@@ -425,6 +574,7 @@ const RVTO_APP = {
   },
 
   QUEUE_DEFS: [
+    // Consumer Sales only for this deployment — add Support entries here if needed.
     {
       name:             'Adult Learner_CC90_New',
       site:             'consumer_sales',
@@ -440,7 +590,7 @@ const RVTO_APP = {
     {
       name:             'College and Grad TP_CC90_New',
       site:             'consumer_sales',
-      workGroupPattern: 'STEM College Test Group|Graduate Test Prep',
+      workGroupPattern: 'STEM College Test Group|Graduate Test Prep|Col-STEM|College and Grad',
       key:              'College_and_Grad_TP_CC90_New'
     },
     {
@@ -460,48 +610,6 @@ const RVTO_APP = {
       site:             'consumer_sales',
       workGroupPattern: 'STEM High School Test Group|K12 Test Prep',
       key:              'High_School_CC90_New'
-    },
-    {
-      name:             'Client Chat',
-      site:             'support',
-      workGroupPattern: 'Support Operations',
-      key:              'Client_Chat'
-    },
-    {
-      name:             'Client SMS',
-      site:             'support',
-      workGroupPattern: 'Support Operations',
-      key:              'Client_SMS'
-    },
-    {
-      name:             'RTN IB Phone Tier 2',
-      site:             'support',
-      workGroupPattern: 'Phone - RTN',
-      key:              'RTN_IB_Phone_Tier_2'
-    },
-    {
-      name:             'RTN IB Phone Tier 3',
-      site:             'support',
-      workGroupPattern: 'Phone - RTN',
-      key:              'RTN_IB_Phone_Tier_3'
-    },
-    {
-      name:             'CEP IB Phone',
-      site:             'support',
-      workGroupPattern: 'Phone - CEP',
-      key:              'CEP_IB_Phone'
-    },
-    {
-      name:             'Tutor Chat',
-      site:             'support',
-      workGroupPattern: 'Support Operations',
-      key:              'Tutor_Chat'
-    },
-    {
-      name:             'Platform Support Chat',
-      site:             'support',
-      workGroupPattern: 'Support Operations',
-      key:              'Platform_Support_Chat'
     }
   ],
 
@@ -516,7 +624,10 @@ const RVTO_APP = {
     SEND_FAILED:   'SEND_FAILED'
   },
 
-  WEEK_BLOCK_PREFIX: 'RVTO_WK'
+  WEEK_BLOCK_PREFIX: 'RVTO_WK',
+
+  /** Shared prefix for multi-day bundle campaign rows (Notes carry BUNDLE_ID=). */
+  BUNDLE_ID_PREFIX: 'RVTO_BND'
 };
 
 /*************************************************************
@@ -526,14 +637,31 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Reverse VTO')
     .addItem('Run Now', 'runReverseVto')
-    .addItem('Run Week-Block VTO', 'runWeekBlockVto')
+    .addItem('Run Week / Single-Day VTO', 'runWeekBlockVto')
     .addSeparator()
     .addItem('Expire Open Offers', 'expireRvtoOffersMenu')
     .addItem('Clear All Offers', 'clearRvtoOffers')
     .addSeparator()
     .addItem('Setup Workbook', 'setupRvtoWorkbook')
+    .addItem('Install offer alert trigger', 'rvtoInstallOfferAlertTrigger_')
+    .addItem('Sync Changelog', 'syncRvtoChangelogMenu')
     .addItem('Cleanup Legacy Tabs', 'cleanupLegacyTabs')
     .addToUi();
+}
+
+/** Menu: append any script changelog versions missing from the Changelog tab. */
+function syncRvtoChangelogMenu() {
+  var sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.CHANGELOG);
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Changelog sheet not found. Run Setup Workbook first.');
+    return;
+  }
+  var result = rvtoSetupChangelog_(sheet);
+  SpreadsheetApp.getUi().alert(
+    'Changelog sync complete.\n' +
+    'Added ' + result.added + ' new version row(s).\n' +
+    'Total entries on tab: ' + result.total + '.'
+  );
 }
 
 /**
@@ -683,7 +811,7 @@ function runReverseVto() {
 
       let sent = false;
       try {
-        sent = rvtoSendOfferEmail_({
+        sent = rvtoDeliverIntradayOffer_({
           config:     config,
           offerId:    offerId,
           email:      person.email,
@@ -698,7 +826,7 @@ function runReverseVto() {
           declineUrl: declineUrl
         });
       } catch (sendErr) {
-        rvtoAudit_('SEND_EMAIL', offerId, 'Unhandled exception: ' + String(sendErr), 'FAILED');
+        rvtoAudit_('SEND_OFFER', offerId, 'Unhandled exception: ' + String(sendErr), 'FAILED');
         sent = false;
       }
 
@@ -751,7 +879,7 @@ function expireRvtoOffersMenu() {
 }
 
 function clearRvtoOffers() {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   if (!sheet) return;
   rvtoClearSheetBody_(sheet);
   SpreadsheetApp.getUi().alert('All offers cleared.');
@@ -762,11 +890,12 @@ function clearRvtoOffers() {
  *************************************************************/
 
 /**
- * Manual entry point: Reverse VTO menu -> Run Week-Block VTO.
- * Reads WEEK_VTO_ENABLED, WEEK_VTO_START_DATE, WEEK_VTO_END_DATE from Config.
- * For each enabled queue, checks that a majority of targeted days show surplus.
- * Sends one email per eligible rep covering the full date range.
- * Cap-exempt: does not increment offersByEmail so normal VTO runs independently.
+ * Manual entry point: Reverse VTO menu -> Run Week / Single-Day VTO.
+ * Reads WEEK_VTO_ENABLED and/or INDIVIDUAL_DAY_VTO_ENABLED and dates from Config.
+ * INDIVIDUAL_DAY_VTO_ENABLED TRUE + INDIVIDUAL_DAY_VTO_TARGET_DATE: one-day campaign
+ * (pulls Assembled for that day only; same offer/commit path as legacy week-block).
+ * Otherwise WEEK_VTO_CAMPAIGN_MODE WEEK_BLOCK (default): one offer for full date range.
+ * PICK_DATES / DOW_IN_RANGE: bundle mode — one email, per-day links (v1.10.0).
  */
 function runWeekBlockVto() {
   const config = rvtoGetConfig_();
@@ -775,17 +904,30 @@ function runWeekBlockVto() {
 
   ctx.enabledQueues = rvtoGetEnabledQueues_(config);
 
-  const enabled = rvtoConfigBool_(config.WEEK_VTO_ENABLED, false);
-  if (!enabled) {
-    SpreadsheetApp.getUi().alert('Week-Block VTO is disabled.\nSet WEEK_VTO_ENABLED = TRUE in the Config tab to activate it.');
-    rvtoAudit_('WEEK_BLOCK_RUN', '', 'Aborted — WEEK_VTO_ENABLED is FALSE', 'WARN');
+  const weekMenuEnabled = rvtoConfigBool_(config.WEEK_VTO_ENABLED, false);
+  const individualEnabled = rvtoConfigBool_(config.INDIVIDUAL_DAY_VTO_ENABLED, false);
+  if (!weekMenuEnabled && !individualEnabled) {
+    SpreadsheetApp.getUi().alert(
+      'Manual campaign is disabled.\n' +
+      'Set WEEK_VTO_ENABLED = TRUE for a week or bundle campaign, or\n' +
+      'set INDIVIDUAL_DAY_VTO_ENABLED = TRUE with INDIVIDUAL_DAY_VTO_TARGET_DATE (yyyy-MM-dd) for a single day.'
+    );
+    rvtoAudit_('WEEK_BLOCK_RUN', '', 'Aborted — WEEK_VTO_ENABLED and INDIVIDUAL_DAY_VTO_ENABLED are both FALSE', 'WARN');
     return;
   }
 
-  const dates = rvtoGetWeekBlockDates_(config, ctx.timezone);
+  const dates = rvtoResolveWeekBlockCampaignDates_(config, ctx.timezone);
   if (!dates) {
-    SpreadsheetApp.getUi().alert('Invalid or missing week-block dates.\nSet WEEK_VTO_START_DATE and WEEK_VTO_END_DATE in the Config tab (format: yyyy-MM-dd).');
-    rvtoAudit_('WEEK_BLOCK_RUN', '', 'Aborted — invalid or missing WEEK_VTO_START_DATE / WEEK_VTO_END_DATE', 'WARN');
+    var msg = individualEnabled
+      ? 'Single-day VTO: set INDIVIDUAL_DAY_VTO_TARGET_DATE to a valid yyyy-MM-dd in the Config tab.'
+      : (
+        'Invalid or missing week VTO campaign dates.\n' +
+        'WEEK_BLOCK: set WEEK_VTO_START_DATE and WEEK_VTO_END_DATE.\n' +
+        'PICK_DATES: set WEEK_VTO_CAMPAIGN_MODE=PICK_DATES and WEEK_VTO_PICK_DATES (comma-separated yyyy-MM-dd).\n' +
+        'DOW_IN_RANGE: set WEEK_VTO_CAMPAIGN_MODE=DOW_IN_RANGE, WEEK_VTO_START_DATE, WEEK_VTO_END_DATE, and WEEK_VTO_TARGET_DOW (1=Mon .. 7=Sun).'
+      );
+    SpreadsheetApp.getUi().alert(msg);
+    rvtoAudit_('WEEK_BLOCK_RUN', '', 'Aborted — could not resolve campaign dates from Config', 'WARN');
     return;
   }
 
@@ -795,21 +937,26 @@ function runWeekBlockVto() {
     return;
   }
 
+  const modeLabel = dates.individualDay
+    ? 'SINGLE_DAY'
+    : (dates.campaignMode === 'WEEK_BLOCK' ? 'WEEK_BLOCK' : ('BUNDLE ' + dates.campaignMode));
   rvtoAudit_('WEEK_BLOCK_RUN', '',
-    'Starting week-block run: ' + dates.startDateStr + ' to ' + dates.endDateStr +
+    'Starting week VTO run [' + modeLabel + ']: ' + dates.startDateStr + ' to ' + dates.endDateStr +
     ' | Days: ' + dates.dateList.length +
     ' | Queues: ' + ctx.enabledQueues.length,
     'INFO');
 
-  const result = rvtoRunWeekBlock_(ctx, dates);
+  const result = dates.campaignMode === 'WEEK_BLOCK'
+    ? rvtoRunWeekBlock_(ctx, dates)
+    : rvtoRunWeekBlockBundle_(ctx, dates);
 
   SpreadsheetApp.getUi().alert([
-    'Week-Block VTO run complete.',
-    'Date range: ' + dates.startDateStr + ' to ' + dates.endDateStr,
+    (dates.individualDay ? 'Single-day VTO run complete' : 'Week VTO run complete') + ' (' + modeLabel + ').',
+    'Date span: ' + dates.startDateStr + ' to ' + dates.endDateStr + ' (' + dates.dateList.length + ' calendar day(s))',
     'Queues checked: ' + ctx.enabledQueues.length,
-    'Offers sent: ' + result.sent,
-    'Offers failed: ' + result.failed,
-    'Reps skipped (no qualifying queue): ' + result.skipped
+    (dates.campaignMode === 'WEEK_BLOCK' ? 'Offers sent: ' : 'Bundle emails sent: ') + result.sent,
+    'Send failures: ' + result.failed,
+    'Reps skipped: ' + result.skipped
   ].join('\n'));
 }
 
@@ -872,7 +1019,8 @@ function rvtoRunWeekBlock_(ctx, dates) {
       queueSurplusIntervals,
       ctx.offerObjects || [],
       qd.name,
-      phoneSchedIdx
+      phoneSchedIdx,
+      ctx.timezone
     );
 
     var headroomSummary = [];
@@ -912,9 +1060,32 @@ function rvtoRunWeekBlock_(ctx, dates) {
       return;
     }
 
+    var maxSendsThisQueue = rvtoWeekVtoMaxSendsPerQueue_(config);
+    var queueSendCount = 0;
+    var stopQueueSends = false;
+
     eligible.forEach(function(person) {
+      if (stopQueueSends) return;
       const email = person.email.trim().toLowerCase();
       if (weekBlockSentThisRun.has(email)) {
+        skipped++;
+        return;
+      }
+
+      // v1.9.8: Cross-run duplicate guard. Skip reps who already received a
+      // week-block offer (any status except SEND_FAILED / blank) whose date
+      // range overlaps the new target range. Prevents a follow-up campaign
+      // from re-offering the same week to a rep whose prior offer expired,
+      // was declined, accepted, or committed.
+      var priorOffer = rvtoHasPriorWeekBlockOffer_(
+        email, dates.startDate, dates.endDate, ctx.offerObjects || [], ctx.timezone
+      );
+      if (priorOffer) {
+        rvtoAudit_('WEEK_BLOCK_DUPLICATE_SKIP', qd.name,
+          'Skipped ' + email + ' — prior week-block offer ' + priorOffer.offerId +
+          ' (' + priorOffer.priorStart + ' to ' + priorOffer.priorEnd +
+          ', status=' + priorOffer.priorStatus + ') overlaps target range',
+          'INFO');
         skipped++;
         return;
       }
@@ -977,11 +1148,16 @@ function rvtoRunWeekBlock_(ctx, dates) {
         rvtoConsumeHeadroom_(email, phoneSchedIdx, headroomMap);
         weekBlockSentThisRun.add(email);
         sent++;
+        queueSendCount++;
+        if (maxSendsThisQueue > 0 && queueSendCount >= maxSendsThisQueue) {
+          rvtoAudit_('WEEK_BLOCK_RUN', qd.name, 'Per-queue cap: ' + maxSendsThisQueue + ' send(s) — WEEK_VTO_MAX_SENDS_PER_QUEUE', 'INFO');
+          stopQueueSends = true;
+        }
         return;
       }
 
       try {
-        didSend = rvtoSendWeekBlockOfferEmail_({
+        didSend = rvtoDeliverWeekBlockOffer_({
           config:        config,
           offerId:       offerId,
           email:         email,
@@ -1028,6 +1204,11 @@ function rvtoRunWeekBlock_(ctx, dates) {
         rvtoConsumeHeadroom_(email, phoneSchedIdx, headroomMap);
         weekBlockSentThisRun.add(email);
         sent++;
+        queueSendCount++;
+        if (maxSendsThisQueue > 0 && queueSendCount >= maxSendsThisQueue) {
+          rvtoAudit_('WEEK_BLOCK_RUN', qd.name, 'Per-queue cap: ' + maxSendsThisQueue + ' send(s) — WEEK_VTO_MAX_SENDS_PER_QUEUE', 'INFO');
+          stopQueueSends = true;
+        }
       } else {
         failed++;
       }
@@ -1049,6 +1230,497 @@ function rvtoRunWeekBlock_(ctx, dates) {
 
   rvtoAudit_('WEEK_BLOCK_RUN', '',
     'Complete | Sent: ' + sent + ' | Failed: ' + failed + ' | Skipped: ' + skipped,
+    'OK');
+
+  return { sent: sent, failed: failed, skipped: skipped };
+}
+
+/**
+ * v1.10.0: Config-driven campaign mode for manual week VTO menu.
+ * WEEK_BLOCK / RANGE / blank = legacy single full-date-range offer (unchanged).
+ * PICK_DATES / BUNDLE_DATES = WEEK_VTO_PICK_DATES comma list.
+ * DOW_IN_RANGE / BUNDLE_DOW = WEEK_VTO_START_DATE..END + WEEK_VTO_TARGET_DOW (1=Mon..7=Sun).
+ */
+function rvtoGetWeekVtoCampaignMode_(config) {
+  var m = String(config.WEEK_VTO_CAMPAIGN_MODE || '').trim().toUpperCase();
+  if (!m || m === 'WEEK_BLOCK' || m === 'RANGE' || m === 'LEGACY') return 'WEEK_BLOCK';
+  if (m === 'PICK_DATES' || m === 'PICK_DAYS' || m === 'BUNDLE_DATES') return 'PICK_DATES';
+  if (m === 'DOW_IN_RANGE' || m === 'DOW' || m === 'BUNDLE_DOW') return 'DOW_IN_RANGE';
+  return 'WEEK_BLOCK';
+}
+
+/**
+ * Resolves campaign dates for the week VTO menu. Adds campaignMode on the object.
+ * v1.10.10: When INDIVIDUAL_DAY_VTO_ENABLED is TRUE, uses INDIVIDUAL_DAY_VTO_TARGET_DATE only
+ * (one calendar day, WEEK_BLOCK engine) and ignores WEEK_VTO_CAMPAIGN_MODE / week date rows.
+ */
+function rvtoResolveWeekBlockCampaignDates_(config, tz) {
+  var tzone = tz || 'America/Chicago';
+
+  if (rvtoConfigBool_(config.INDIVIDUAL_DAY_VTO_ENABLED, false)) {
+    var oneStr = rvtoWkNormDateStr_(config.INDIVIDUAL_DAY_VTO_TARGET_DATE, tzone);
+    if (!oneStr) return null;
+    var s0 = rvtoBuildDateTime_(oneStr, '00:00', tzone);
+    var e0 = rvtoBuildDateTime_(oneStr, '23:59', tzone);
+    if (!s0 || !e0) return null;
+    return {
+      startDate:      s0,
+      endDate:        e0,
+      startDateStr:   oneStr,
+      endDateStr:     oneStr,
+      dateList:       [oneStr],
+      campaignMode:   'WEEK_BLOCK',
+      individualDay:  true
+    };
+  }
+
+  var mode = rvtoGetWeekVtoCampaignMode_(config);
+
+  if (mode === 'WEEK_BLOCK') {
+    var d = rvtoGetWeekBlockDates_(config, tzone);
+    if (d) d.campaignMode = 'WEEK_BLOCK';
+    return d;
+  }
+
+  var list = [];
+  if (mode === 'PICK_DATES') {
+    var raw = String(config.WEEK_VTO_PICK_DATES || '').trim();
+    if (!raw) return null;
+    raw.split(',').forEach(function(part) {
+      var tok = String(part || '').trim();
+      if (!tok) return;
+      var norm = rvtoWkNormDateStr_(tok, tzone);
+      if (norm) list.push(norm);
+    });
+    list = list.filter(function(v, i, a) { return a.indexOf(v) === i; }).sort();
+  } else if (mode === 'DOW_IN_RANGE') {
+    var startStr = rvtoWkNormDateStr_(config.WEEK_VTO_START_DATE, tzone);
+    var endStr   = rvtoWkNormDateStr_(config.WEEK_VTO_END_DATE,   tzone);
+    var dowTarget = Number(config.WEEK_VTO_TARGET_DOW);
+    if (!startStr || !endStr || !isFinite(dowTarget) || dowTarget < 1 || dowTarget > 7) return null;
+    var cursor = rvtoBuildDateTime_(startStr, '00:00', tzone);
+    var endD   = rvtoBuildDateTime_(endStr,   '23:59', tzone);
+    if (!cursor || !endD || endD < cursor) return null;
+    var walk = new Date(cursor.getTime());
+    while (walk <= endD) {
+      var u = parseInt(Utilities.formatDate(walk, tzone, 'u'), 10);
+      if (u === dowTarget) {
+        list.push(Utilities.formatDate(walk, tzone, 'yyyy-MM-dd'));
+      }
+      walk.setDate(walk.getDate() + 1);
+    }
+    list = list.filter(function(v, i, a) { return a.indexOf(v) === i; }).sort();
+  }
+
+  if (!list.length) return null;
+
+  var startDateStr = list[0];
+  var endDateStr   = list[list.length - 1];
+  var startDate    = rvtoBuildDateTime_(startDateStr, '00:00', tzone);
+  var endDate      = rvtoBuildDateTime_(endDateStr,   '23:59', tzone);
+  if (!startDate || !endDate) return null;
+
+  return {
+    startDate:      startDate,
+    endDate:        endDate,
+    startDateStr:   startDateStr,
+    endDateStr:     endDateStr,
+    dateList:       list,
+    campaignMode:   mode
+  };
+}
+
+/** Restrict surplus interval map to listed calendar days. */
+function rvtoSliceSurplusIntervalsByDays_(queueSurplusIntervals, dayStrList) {
+  var out = {};
+  (dayStrList || []).forEach(function(d) {
+    if (queueSurplusIntervals && queueSurplusIntervals[d]) {
+      out[d] = queueSurplusIntervals[d];
+    }
+  });
+  return out;
+}
+
+/** Same thresholds as rvtoFindEligible_ — used by bundle campaign sends. */
+function rvtoOfferCapsAllowSend_(email, snapshot, rules) {
+  var maxPerDay = Number(rules.MAX_OFFERS_PER_PERSON_PER_DAY || 1);
+  var maxPer24h = Number(rules.MAX_EMAILS_PER_24H || 1);
+  var h = snapshot || { sentToday: 0, sentLast24h: 0, lastSentAt: null };
+  if (h.sentToday >= maxPerDay || h.sentLast24h >= maxPer24h) return false;
+  if (h.lastSentAt) {
+    var minGapHours = Number(rules.OFFER_MIN_GAP_HOURS || 1);
+    var gapMs       = minGapHours * 60 * 60 * 1000;
+    var msSinceLast = new Date().getTime() - new Date(h.lastSentAt).getTime();
+    if (msSinceLast < gapMs) return false;
+  }
+  return true;
+}
+
+function rvtoBumpOffersByEmailAfterBundle_(ctx, email) {
+  var k = String(email || '').trim().toLowerCase();
+  if (!k) return;
+  if (!ctx.offersByEmail) ctx.offersByEmail = {};
+  if (!ctx.offersByEmail[k]) ctx.offersByEmail[k] = { sentToday: 0, sentLast24h: 0, lastSentAt: null };
+  ctx.offersByEmail[k].sentToday++;
+  ctx.offersByEmail[k].sentLast24h++;
+  ctx.offersByEmail[k].lastSentAt = new Date();
+}
+
+/**
+ * One HTML email: multiple optional VTO days, each with Accept / Decline links.
+ */
+function rvtoSendWeekVtoBundleEmail_(opts) {
+  const config   = opts.config;
+  const tz       = opts.timezone || config.TIMEZONE || 'America/Chicago';
+  const fromName = config.EMAIL_FROM_NAME || 'Scheduling Bot';
+  const dayLines = (opts.dayOffers || []).map(function(d) {
+    var disp = rvtoFormatDateDisplay_(d.dayStr, tz);
+    var acc  = d.acceptUrl ? "<a href='" + rvtoEscHtml_(d.acceptUrl) + "' style='font-size:15px;font-weight:bold;'>Accept " + rvtoEscHtml_(disp) + '</a>' : '';
+    var dec  = d.declineUrl ? " &nbsp;|&nbsp; <a href='" + rvtoEscHtml_(d.declineUrl) + "'>Decline " + rvtoEscHtml_(disp) + '</a>' : '';
+    return '<li style="margin:10px 0;">' + acc + dec + '</li>';
+  }).join('');
+
+  var daySummary = (opts.dayOffers || []).map(function(d) {
+    return rvtoFormatDateDisplay_(d.dayStr, tz);
+  }).join(', ');
+
+  const subject = (config.EMAIL_SUBJECT_PREFIX || 'VTO Opportunity') +
+    ' — Optional days: ' + daySummary;
+  const expiresStr = Utilities.formatDate(opts.expiresAt, tz, "EEE, MMM d 'at' h:mm a") + ' CT';
+
+  const html = [
+    "<div style='font-family:Arial,sans-serif;font-size:14px;line-height:1.5;'>",
+    "<p>Hi " + rvtoEscHtml_(opts.name || 'there') + ",</p>",
+    "<p>You have <strong>voluntary time off</strong> available on the following dates. ",
+    'Each date is independent — accept or decline <em>per day</em> (unpaid if accepted).</p>',
+    "<p><strong>Queue:</strong> " + rvtoEscHtml_(opts.queue) + '</p>',
+    '<ul style="padding-left:20px;">' + dayLines + '</ul>',
+    "<p>Please respond before this offer expires.<br>",
+    "<strong>Offer expires:</strong> " + rvtoEscHtml_(expiresStr) + '</p>',
+    "<p>Thank you,</p><p>" + rvtoEscHtml_(fromName) + '</p></div>'
+  ].join('');
+
+  try {
+    rvtoSendOfferGmailWithPreview_({
+      config:     config,
+      repEmail:   opts.email,
+      offerKind:  'WEEK_BLOCK_BUNDLE',
+      primaryTo:  opts.email,
+      subject:    subject,
+      plain:      rvtoHtmlToPlain_(html),
+      html:       html,
+      fromName:   fromName
+    });
+    rvtoAudit_('WEEK_BLOCK_BUNDLE_SEND', opts.bundleId || '', 'Sent bundle to ' + opts.email +
+      ' | days=' + (opts.dayOffers || []).length + rvtoOfferPreviewAuditSuffix_(config), 'OK');
+    return true;
+  } catch (err) {
+    rvtoAudit_('WEEK_BLOCK_BUNDLE_SEND', opts.bundleId || '', String(err), 'FAILED');
+    return false;
+  }
+}
+
+/** Max week-block or bundle sends per queue in one menu run; 0 = unlimited. */
+function rvtoWeekVtoMaxSendsPerQueue_(config) {
+  var raw = config && config.WEEK_VTO_MAX_SENDS_PER_QUEUE;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return 0;
+  var n = Number(raw);
+  return isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * v1.10.0: Multi-day bundle campaign — N Offer rows, one email, per-day Accept/Decline.
+ * Honors MAX_OFFERS_PER_PERSON_PER_DAY, MAX_EMAILS_PER_24H, OFFER_MIN_GAP_HOURS via ctx.offersByEmail.
+ */
+function rvtoRunWeekBlockBundle_(ctx, dates) {
+  const config     = ctx.config;
+  const sendEmails = rvtoConfigBool_(config.SEND_EMAILS, true);
+  const webAppUrl  = rvtoGetWebAppUrl_(config);
+  const holdHours  = Number(ctx.rules.OFFER_HOLD_HOURS || 1);
+  const tz         = ctx.timezone;
+
+  const schedules     = rvtoPullSchedulesForDateRange_(ctx, dates.startDate, dates.endDate);
+  const schedIdx      = rvtoBuildSchedIdx_(schedules);
+  const phoneSchedIdx = rvtoBuildPhoneSchedIdx_(schedules.phoneRows || []);
+  const roster        = rvtoGetRoster_(ctx);
+
+  const surplusIntervalsByQueue = rvtoFindWeekBlockSurplusDays_(ctx, dates);
+
+  rvtoAudit_('WEEK_BLOCK_SURPLUS', '',
+    '[BUNDLE] Surplus day counts by queue: ' +
+    Object.keys(surplusIntervalsByQueue).map(function(q) {
+      return q + '=' + Object.keys(surplusIntervalsByQueue[q] || {}).length + '/' + dates.dateList.length;
+    }).join(', '),
+    'INFO');
+
+  const qualifyingQueues = ctx.enabledQueues.filter(function(qd) {
+    return Object.keys(surplusIntervalsByQueue[qd.name] || {}).length > 0;
+  });
+
+  if (!qualifyingQueues.length) {
+    rvtoAudit_('WEEK_BLOCK_RUN', '', '[BUNDLE] No queues had surplus on any target day — no offers sent', 'OK');
+    return { sent: 0, failed: 0, skipped: 0 };
+  }
+
+  const weekBlockSentThisRun = new Set();
+  let sent    = 0;
+  let failed  = 0;
+  let skipped = 0;
+
+  qualifyingQueues.forEach(function(qd) {
+    const qMinSurplus    = rvtoEffectiveMinSurplusForQueue_(qd.name, ctx.rules);
+    const qHeadroomFloor = rvtoEffectiveHeadroomFloorForQueue_(qd.name, ctx.rules);
+    const surplusDays           = Object.keys(surplusIntervalsByQueue[qd.name] || {});
+    const queueSurplusIntervals = surplusIntervalsByQueue[qd.name] || {};
+    const headroomMapFull       = rvtoBuildHeadroomMap_(
+      queueSurplusIntervals,
+      ctx.offerObjects || [],
+      qd.name,
+      phoneSchedIdx,
+      tz
+    );
+
+    rvtoAudit_('WEEK_BLOCK_HEADROOM', qd.name,
+      '[BUNDLE] Initial headroom intervals: ' + Object.keys(headroomMapFull).length,
+      'INFO');
+
+    const syntheticDeficit = {
+      deficitId:   rvtoBuildId_('RVTO_WK_DEF'),
+      queue:       qd.name,
+      site:        qd.site,
+      date:        dates.startDateStr,
+      start:       '00:00',
+      end:         '23:59',
+      netMin:      1,
+      headsNeeded: 999,
+      startTime:   dates.startDate,
+      endTime:     dates.endDate
+    };
+
+    const eligible = rvtoFindWeekBlockEligible_(
+      syntheticDeficit, roster, schedIdx, ctx, dates, queueSurplusIntervals
+    );
+
+    if (!eligible.length) {
+      rvtoAudit_('WEEK_BLOCK_ELIGIBILITY', qd.name, '[BUNDLE] No eligible reps for this queue', 'WARN');
+      skipped++;
+      return;
+    }
+
+    var maxSendsThisQueue = rvtoWeekVtoMaxSendsPerQueue_(config);
+    var queueSendCount = 0;
+    var stopQueueSends = false;
+    var queueSkip = { duplicateRun: 0, cap: 0, noSchedule: 0, noBundleDays: 0 };
+
+    eligible.forEach(function(person) {
+      if (stopQueueSends) return;
+      const email = person.email.trim().toLowerCase();
+      if (weekBlockSentThisRun.has(email)) {
+        queueSkip.duplicateRun++;
+        skipped++;
+        return;
+      }
+
+      var histSnap = ctx.offersByEmail && ctx.offersByEmail[email]
+        ? ctx.offersByEmail[email]
+        : { sentToday: 0, sentLast24h: 0, lastSentAt: null };
+      if (!rvtoOfferCapsAllowSend_(email, histSnap, ctx.rules)) {
+        rvtoAudit_('WEEK_BLOCK_BUNDLE_CAP', qd.name, 'Skipped ' + email + ' — MAX_OFFERS_PER_PERSON_PER_DAY / MAX_EMAILS_PER_24H / OFFER_MIN_GAP_HOURS', 'INFO');
+        queueSkip.cap++;
+        skipped++;
+        return;
+      }
+
+      const repScheduledDays = rvtoGetRepScheduledDays_(email, surplusDays, schedIdx, tz);
+      if (!repScheduledDays.length) {
+        queueSkip.noSchedule++;
+        skipped++;
+        return;
+      }
+
+      var bundleDays = [];
+      for (var di = 0; di < repScheduledDays.length; di++) {
+        var dStr = repScheduledDays[di];
+        var dayStart = rvtoBuildDateTime_(dStr, '00:00', tz);
+        var dayEnd   = rvtoBuildDateTime_(dStr, '23:59', tz);
+        if (!dayStart || !dayEnd) continue;
+
+        if (rvtoHasPriorWeekBlockOffer_(email, dayStart, dayEnd, ctx.offerObjects || [], tz)) {
+          continue;
+        }
+
+        var daySlice = {};
+        if (queueSurplusIntervals[dStr]) daySlice[dStr] = queueSurplusIntervals[dStr];
+        var dayHeadMap = rvtoBuildHeadroomMap_(
+          daySlice,
+          ctx.offerObjects || [],
+          qd.name,
+          phoneSchedIdx,
+          tz
+        );
+        if (!rvtoRepCanFitInHeadroom_(email, phoneSchedIdx, dayHeadMap, qMinSurplus, qd.name, qHeadroomFloor)) {
+          continue;
+        }
+        bundleDays.push(dStr);
+      }
+
+      if (!bundleDays.length) {
+        rvtoAudit_('WEEK_BLOCK_BUNDLE', qd.name, 'Skipped ' + email + ' — no qualifying days after dedup/headroom', 'OK');
+        queueSkip.noBundleDays++;
+        skipped++;
+        return;
+      }
+
+      bundleDays.sort();
+
+      var bundleId = rvtoBuildId_(RVTO_APP.BUNDLE_ID_PREFIX);
+      var sentAt   = new Date();
+      var expiresAt = rvtoAddHours_(sentAt, holdHours);
+
+      var dayOffers = [];
+      for (var j = 0; j < bundleDays.length; j++) {
+        var dayStr = bundleDays[j];
+        var blocksForDay = rvtoGetRepScheduledBlocks_(email, [dayStr], schedIdx, tz);
+        var offerId = rvtoBuildId_(RVTO_APP.WEEK_BLOCK_PREFIX);
+        var token   = rvtoCreateToken_(offerId, email);
+        var acceptUrl = webAppUrl
+          ? (webAppUrl + '?offer_id=' + encodeURIComponent(offerId) + '&action=accept&token='  + encodeURIComponent(token) + '&offer_type=week_block')
+          : '';
+        var declineUrl = webAppUrl
+          ? (webAppUrl + '?offer_id=' + encodeURIComponent(offerId) + '&action=decline&token=' + encodeURIComponent(token) + '&offer_type=week_block')
+          : '';
+        dayOffers.push({
+          dayStr:      dayStr,
+          offerId:     offerId,
+          token:       token,
+          acceptUrl:   acceptUrl,
+          declineUrl:  declineUrl,
+          blocksStr:   blocksForDay.join('|')
+        });
+      }
+
+      var combinedSlice = rvtoSliceSurplusIntervalsByDays_(queueSurplusIntervals, bundleDays);
+      var combinedHeadMap = rvtoBuildHeadroomMap_(
+        combinedSlice,
+        ctx.offerObjects || [],
+        qd.name,
+        phoneSchedIdx,
+        tz
+      );
+
+      var didSend = false;
+
+      if (!sendEmails) {
+        for (var pi = 0; pi < dayOffers.length; pi++) {
+          var p = dayOffers[pi];
+          rvtoAppendWeekBlockOfferRow_({
+            offerId:         p.offerId,
+            deficitId:       bundleId,
+            bundleId:        bundleId,
+            date:            p.dayStr,
+            name:            person.name,
+            email:           email,
+            agentId:         person.agentId || '',
+            queue:           qd.name,
+            manager:         person.manager || '',
+            sentAt:          sentAt,
+            expiresAt:       expiresAt,
+            holdHours:       holdHours,
+            status:          RVTO_APP.OFFER_STATUSES.PENDING_SEND,
+            token:           p.token,
+            acceptUrl:       p.acceptUrl,
+            declineUrl:      p.declineUrl,
+            scheduledDays:   p.dayStr,
+            scheduledBlocks: p.blocksStr
+          });
+        }
+        SpreadsheetApp.flush();
+        rvtoConsumeHeadroom_(email, phoneSchedIdx, combinedHeadMap);
+        rvtoBumpOffersByEmailAfterBundle_(ctx, email);
+        weekBlockSentThisRun.add(email);
+        sent++;
+        queueSendCount++;
+        if (maxSendsThisQueue > 0 && queueSendCount >= maxSendsThisQueue) {
+          rvtoAudit_('WEEK_BLOCK_BUNDLE', qd.name, 'Per-queue cap: ' + maxSendsThisQueue + ' bundle send(s) — WEEK_VTO_MAX_SENDS_PER_QUEUE', 'INFO');
+          stopQueueSends = true;
+        }
+        return;
+      }
+
+      try {
+        didSend = rvtoDeliverWeekVtoBundleOffer_({
+          config:    config,
+          email:     email,
+          name:      person.name,
+          queue:     qd.name,
+          timezone:  tz,
+          expiresAt: expiresAt,
+          bundleId:  bundleId,
+          dayOffers: dayOffers
+        });
+      } catch (err2) {
+        rvtoAudit_('WEEK_BLOCK_BUNDLE_SEND', bundleId, 'Unhandled exception: ' + String(err2), 'FAILED');
+        didSend = false;
+      }
+
+      var finalStatus = didSend
+        ? RVTO_APP.OFFER_STATUSES.SENT
+        : RVTO_APP.OFFER_STATUSES.SEND_FAILED;
+
+      for (var qi = 0; qi < dayOffers.length; qi++) {
+        var q = dayOffers[qi];
+        rvtoAppendWeekBlockOfferRow_({
+          offerId:         q.offerId,
+          deficitId:       bundleId,
+          bundleId:        bundleId,
+          date:            q.dayStr,
+          name:            person.name,
+          email:           email,
+          agentId:         person.agentId || '',
+          queue:           qd.name,
+          manager:         person.manager || '',
+          sentAt:          sentAt,
+          expiresAt:       expiresAt,
+          holdHours:       holdHours,
+          status:          finalStatus,
+          token:           q.token,
+          acceptUrl:       q.acceptUrl,
+          declineUrl:      q.declineUrl,
+          scheduledDays:   q.dayStr,
+          scheduledBlocks: q.blocksStr
+        });
+      }
+      SpreadsheetApp.flush();
+
+      if (didSend) {
+        rvtoConsumeHeadroom_(email, phoneSchedIdx, combinedHeadMap);
+        rvtoBumpOffersByEmailAfterBundle_(ctx, email);
+        weekBlockSentThisRun.add(email);
+        sent++;
+        queueSendCount++;
+        if (maxSendsThisQueue > 0 && queueSendCount >= maxSendsThisQueue) {
+          rvtoAudit_('WEEK_BLOCK_BUNDLE', qd.name, 'Per-queue cap: ' + maxSendsThisQueue + ' bundle send(s) — WEEK_VTO_MAX_SENDS_PER_QUEUE', 'INFO');
+          stopQueueSends = true;
+        }
+      } else {
+        failed++;
+      }
+    });
+
+    if (queueSendCount === 0 && eligible.length) {
+      rvtoAudit_('WEEK_BLOCK_BUNDLE_QUEUE_SUMMARY', qd.name,
+        'Zero bundle sends | eligible=' + eligible.length +
+        ' | skip cap=' + queueSkip.cap +
+        ' | noSchedule=' + queueSkip.noSchedule +
+        ' | noBundleDays/headroom/dedup=' + queueSkip.noBundleDays +
+        ' | duplicateRun=' + queueSkip.duplicateRun +
+        ' — see WEEK_BLOCK_ELIGIBILITY and WEEK_BLOCK_HEADROOM rows above',
+        'WARN');
+    }
+  });
+
+  rvtoAudit_('WEEK_BLOCK_RUN', '',
+    '[BUNDLE] Complete | Sent: ' + sent + ' | Failed: ' + failed + ' | Skipped: ' + skipped,
     'OK');
 
   return { sent: sent, failed: failed, skipped: skipped };
@@ -1201,7 +1873,7 @@ function rvtoFindWeekBlockSurplusDays_(ctx, dates) {
           const netRaw    = rvtoIsNum_(it.staffing_net) ? Number(it.staffing_net) : (scheduled - required);
           const iStart    = new Date(it.start_time * 1000);
           const iEnd      = new Date(it.end_time   * 1000);
-          const rampBoost = rvtoRampNetBoostPerQueue_(iStart, iEnd, ctx, ctx.enabledQueues.length);
+          const rampBoost = rvtoEffectiveRampBoostForInterval_(iStart, iEnd, ctx);
           const net         = netRaw + rampBoost;
           if (net >= qMinSurplus && it.start_time && it.end_time) {
             dayIntervals.push({
@@ -1230,8 +1902,9 @@ function rvtoFindWeekBlockSurplusDays_(ctx, dates) {
 }
 
 /**
- * v1.7.6: Eligibility for week-block offers. Same pipeline as rvtoFindEligible_ but:
- *  - Cap-exempt: does not check or update offersByEmail
+ * v1.7.6: Eligibility for week-block / bundle week VTO offers. Same pipeline as rvtoFindEligible_ but:
+ *  - Cap-exempt for legacy WEEK_BLOCK single-range sends (rvtoRunWeekBlock_); bundle mode applies
+ *    MAX_OFFERS_PER_PERSON_PER_DAY / MAX_EMAILS_PER_24H / OFFER_MIN_GAP in rvtoRunWeekBlockBundle_.
  *  - 15% surplus gate: rep's scheduled hours overlapping surplus intervals must
  *    be >= WEEK_VTO_MIN_SURPLUS_PCT % of their total scheduled hours for the week
  *  - Sort: PGC primary (unknown first, then lowest), midday secondary
@@ -1258,8 +1931,165 @@ function rvtoRepPersonalFloor_(email, schedIdx, surplusIntervalsByQueue) {
   return minNet;
 }
 
-function rvtoBuildHeadroomMap_(surplusIntervalsByQueue, offerObjects, queueName, schedIdx) {
+/**
+ * Calendar days a WEEK_VTO / bundle offer row covers (yyyy-MM-dd strings).
+ * Parses Date ("yyyy-MM-dd", "start to end") or Notes "Days:" list.
+ */
+function rvtoWeekBlockOfferDayKeys_(obj, tz) {
+  var tzone = tz || 'America/Chicago';
+  var notes = String(obj['Notes'] || '');
+  var dateRaw = obj['Date'];
+  var dateStr = (dateRaw instanceof Date)
+    ? Utilities.formatDate(dateRaw, tzone, 'yyyy-MM-dd')
+    : String(dateRaw || '').trim();
+
+  var mRange = dateStr.match(/(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})/);
+  if (mRange) {
+    var cursor = rvtoBuildDateTime_(mRange[1], '00:00', tzone);
+    var endD   = rvtoBuildDateTime_(mRange[2], '23:59', tzone);
+    if (!cursor || !endD) return [];
+    var out = [];
+    var walk = new Date(cursor.getTime());
+    while (walk <= endD) {
+      out.push(Utilities.formatDate(walk, tzone, 'yyyy-MM-dd'));
+      walk.setDate(walk.getDate() + 1);
+    }
+    return out;
+  }
+
+  var mSingle = dateStr.match(/^(\d{4}-\d{2}-\d{2})$/);
+  if (mSingle) return [mSingle[1]];
+
+  var daysMatch = notes.match(/Days:\s*([^\s|]+)/);
+  if (daysMatch) {
+    return daysMatch[1].split(',')
+      .map(function(d) { return d.trim(); })
+      .filter(function(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); });
+  }
+
+  return [];
+}
+
+/**
+ * v1.9.8: Returns the most recent prior WEEK_VTO offer row for this email
+ * whose date range overlaps [targetStart, targetEnd], or null if none.
+ *
+ * v1.9.9: Identify week-block rows by Offer ID prefix RVTO_APP.WEEK_BLOCK_PREFIX
+ * ("RVTO_WK") FIRST, with the Notes "WEEK_VTO" tag as a secondary signal. The
+ * Notes-only check in v1.9.8 missed EXPIRED week-block offers because
+ * expireRvtoOffers_() used to overwrite Notes with "Expired after hold window."
+ * on expiry, erasing the tag. The Offer ID prefix is immutable and matches
+ * what doGet() already uses to route week-block responses, so dedup is robust
+ * against any downstream Notes mutation.
+ *
+ * Status filter:
+ *   - Skipped: SEND_FAILED, blank   (the rep never actually received the offer)
+ *   - Counted: SENT, PENDING_SEND, ACCEPTED, COMMITTED, DECLINED, EXPIRED,
+ *              COMMIT_FAILED                (rep was meaningfully offered the
+ *                                            window; do not duplicate)
+ *
+ * Date parsing: week-block rows store the Date column as "yyyy-MM-dd to yyyy-MM-dd".
+ * Sheets may auto-coerce the start of that string to a Date object on read, so we
+ * fall back to scanning Notes ("Days: yyyy-MM-dd,yyyy-MM-dd,...") when the Date
+ * column does not match the expected pattern.
+ *
+ * Returns:
+ *   null                       - no overlap
+ *   { offerId, priorStart, priorEnd, priorStatus }  - overlapping prior offer
+ */
+function rvtoHasPriorWeekBlockOffer_(email, targetStart, targetEnd, offerObjects, tz) {
+  if (!email || !offerObjects || !offerObjects.length) return null;
+  if (!targetStart || !targetEnd) return null;
+
+  var emailLc = String(email).trim().toLowerCase();
+  var tzone   = tz || 'America/Chicago';
+  var targetStartMs = targetStart.getTime();
+  var targetEndMs   = targetEnd.getTime();
+  var match = null;
+
+  for (var i = 0; i < offerObjects.length; i++) {
+    var obj     = offerObjects[i];
+    var offerId = String(obj['Offer ID'] || '').trim();
+    var notes   = String(obj['Notes']    || '');
+
+    // v1.9.9: Identify by Offer ID prefix (robust against Notes clobbering on
+    // expiry) with Notes tag as secondary signal for any legacy edge case.
+    var isWeekBlock = (offerId.indexOf(RVTO_APP.WEEK_BLOCK_PREFIX) === 0)
+                   || (notes.indexOf('WEEK_VTO') !== -1);
+    if (!isWeekBlock) continue;
+
+    var rowEmail = String(obj['Email'] || '').trim().toLowerCase();
+    if (rowEmail !== emailLc) continue;
+
+    var status = String(obj['Status'] || '').trim().toUpperCase();
+    if (!status || status === RVTO_APP.OFFER_STATUSES.SEND_FAILED) continue;
+
+    // Parse "yyyy-MM-dd to yyyy-MM-dd" from the Date column.
+    var dateRaw = obj['Date'];
+    var dateStr = (dateRaw instanceof Date)
+      ? Utilities.formatDate(dateRaw, tzone, 'yyyy-MM-dd')
+      : String(dateRaw || '').trim();
+
+    var priorStartStr = '';
+    var priorEndStr   = '';
+
+    var m = dateStr.match(/(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})/);
+    if (m) {
+      priorStartStr = m[1];
+      priorEndStr   = m[2];
+    } else {
+      // v1.10.0: Single-day week-block / bundle rows store Date as yyyy-MM-dd only.
+      var mSingle = dateStr.match(/^(\d{4}-\d{2}-\d{2})$/);
+      if (mSingle) {
+        priorStartStr = mSingle[1];
+        priorEndStr   = mSingle[1];
+      }
+    }
+    if (!priorStartStr) {
+      // Fallback: scan Notes for "Days: yyyy-MM-dd,yyyy-MM-dd,..."
+      var daysMatch = notes.match(/Days:\s*([^\s|]+)/);
+      if (daysMatch) {
+        var days = daysMatch[1].split(',')
+          .map(function(d) { return d.trim(); })
+          .filter(function(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); });
+        if (days.length) {
+          days.sort();
+          priorStartStr = days[0];
+          priorEndStr   = days[days.length - 1];
+        }
+      }
+    }
+
+    if (!priorStartStr || !priorEndStr) continue;
+
+    var priorStart = rvtoBuildDateTime_(priorStartStr, '00:00', tzone);
+    var priorEnd   = rvtoBuildDateTime_(priorEndStr,   '23:59', tzone);
+    if (!priorStart || !priorEnd) continue;
+
+    if (priorStart.getTime() <= targetEndMs && priorEnd.getTime() >= targetStartMs) {
+      // Prefer the most recently sent overlapping offer for the audit message.
+      var sentAt = obj['Sent At'] ? new Date(obj['Sent At']) : null;
+      var candidate = {
+        offerId:     String(obj['Offer ID'] || '').trim(),
+        priorStart:  priorStartStr,
+        priorEnd:    priorEndStr,
+        priorStatus: status,
+        sentAt:      (sentAt && !isNaN(sentAt.getTime())) ? sentAt : null
+      };
+      if (!match) {
+        match = candidate;
+      } else if (candidate.sentAt && (!match.sentAt || candidate.sentAt > match.sentAt)) {
+        match = candidate;
+      }
+    }
+  }
+
+  return match;
+}
+
+function rvtoBuildHeadroomMap_(surplusIntervalsByQueue, offerObjects, queueName, schedIdx, tz) {
   const map = {};
+  var tzone = tz || 'America/Chicago';
 
   Object.keys(surplusIntervalsByQueue).forEach(function(dateStr) {
     (surplusIntervalsByQueue[dateStr] || []).forEach(function(interval) {
@@ -1283,9 +2113,16 @@ function rvtoBuildHeadroomMap_(surplusIntervalsByQueue, offerObjects, queueName,
     var email = String(obj['Email'] || '').trim().toLowerCase();
     if (!email) return;
 
+    var offerDays = rvtoWeekBlockOfferDayKeys_(obj, tzone);
+    if (!offerDays.length) return;
+    var offerDaySet = {};
+    offerDays.forEach(function(d) { offerDaySet[d] = true; });
+
     var repBlocks = schedIdx[email] || [];
     Object.keys(map).forEach(function(key) {
       var entry = map[key];
+      var intervalDay = Utilities.formatDate(entry.start, tzone, 'yyyy-MM-dd');
+      if (!offerDaySet[intervalDay]) return;
       for (var i = 0; i < repBlocks.length; i++) {
         var block = repBlocks[i];
         var oStart = Math.max(block.start.getTime(), entry.start.getTime());
@@ -1386,6 +2223,8 @@ function rvtoFindWeekBlockEligible_(syntheticDeficit, roster, schedIdx, ctx, dat
   const tz              = ctx.timezone;
   const queueDef        = RVTO_APP.QUEUE_DEFS.filter(function(qd) { return qd.name === syntheticDeficit.queue; })[0];
   const workGroupPattern = queueDef ? queueDef.workGroupPattern : '';
+  const pgcCeiling       = rvtoPgcOfferCeilingFromConfig_(ctx.config);
+  const pgcMapForCeiling = ctx.pgcByNormalizedName || {};
 
   // Min surplus % threshold (default 15)
   const minSurplusPct = (function() {
@@ -1400,7 +2239,7 @@ function rvtoFindWeekBlockEligible_(syntheticDeficit, roster, schedIdx, ctx, dat
 
   const eligible = [];
   var debugCounts = {
-    noEmail: 0, queueMismatch: 0, noFly: 0, shadowExcluded: 0,
+    noEmail: 0, queueMismatch: 0, noFly: 0, shadowExcluded: 0, pgcAboveCeiling: 0,
     notScheduled: 0, belowSurplusPct: 0, passed: 0
   };
 
@@ -1410,6 +2249,10 @@ function rvtoFindWeekBlockEligible_(syntheticDeficit, roster, schedIdx, ctx, dat
     if (!rvtoWorkGroupMatches_(person.workGroup, workGroupPattern)) { debugCounts.queueMismatch++; return; }
     if (noFlySet.has(rvtoNormalizeName_(person.name))) { debugCounts.noFly++; return; }
     if (shadowEmails.has(email)) { debugCounts.shadowExcluded++; return; }
+    if (pgcCeiling !== null && !rvtoRepPassesPgcOfferCeiling_(person.name, pgcMapForCeiling, pgcCeiling)) {
+      debugCounts.pgcAboveCeiling++;
+      return;
+    }
 
     // Must be scheduled on at least one surplus day
     const hasAnySurplusDay = surplusDays.some(function(dateStr) {
@@ -1451,6 +2294,7 @@ function rvtoFindWeekBlockEligible_(syntheticDeficit, roster, schedIdx, ctx, dat
     ' | queueMismatch: ' + debugCounts.queueMismatch +
     ' | noFly: ' + debugCounts.noFly +
     ' | shadowExcluded: ' + debugCounts.shadowExcluded +
+    ' | pgcAboveCeiling: ' + debugCounts.pgcAboveCeiling +
     ' | notScheduled: ' + debugCounts.notScheduled +
     ' | belowSurplusPct (<' + minSurplusPct + '%): ' + debugCounts.belowSurplusPct +
     ' | passed: ' + debugCounts.passed,
@@ -1648,8 +2492,17 @@ function rvtoSendWeekBlockOfferEmail_(opts) {
   ].join('');
 
   try {
-    GmailApp.sendEmail(opts.email, subject, rvtoHtmlToPlain_(html), { name: fromName, htmlBody: html });
-    rvtoAudit_('WEEK_BLOCK_SEND', opts.offerId, 'Sent to ' + opts.email, 'OK');
+    rvtoSendOfferGmailWithPreview_({
+      config:     config,
+      repEmail:   opts.email,
+      offerKind:  'WEEK_BLOCK_WEEK',
+      primaryTo:  opts.email,
+      subject:    subject,
+      plain:      rvtoHtmlToPlain_(html),
+      html:       html,
+      fromName:   fromName
+    });
+    rvtoAudit_('WEEK_BLOCK_SEND', opts.offerId, 'Sent to ' + opts.email + rvtoOfferPreviewAuditSuffix_(config), 'OK');
     return true;
   } catch (err) {
     rvtoAudit_('WEEK_BLOCK_SEND', opts.offerId, String(err), 'FAILED');
@@ -1663,15 +2516,18 @@ function rvtoSendWeekBlockOfferEmail_(opts) {
  * scheduledDays stored in Notes alongside the tag.
  */
 function rvtoAppendWeekBlockOfferRow_(o) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   if (!sheet) return;
   // v1.7.3: Notes stores both the day list (for summary script) and the
   // per-block schedule (for precise Assembled commits).
-  // Format: WEEK_VTO | Days: yyyy-MM-dd,... | Blocks: yyyy-MM-dd HH:mm-HH:mm|...
-  var notes = 'WEEK_VTO | Days: ' + (o.scheduledDays || '');
+  // v1.10.0: Optional BUNDLE_ID= groups multi-day single-email campaigns.
+  // Format: WEEK_VTO | BUNDLE_ID=... | Days: yyyy-MM-dd,... | Blocks: ...
+  var notes = 'WEEK_VTO';
+  if (o.bundleId) notes += ' | BUNDLE_ID=' + o.bundleId;
+  notes += ' | Days: ' + (o.scheduledDays || '');
   if (o.scheduledBlocks) notes += ' | Blocks: ' + o.scheduledBlocks;
   sheet.appendRow([
-    o.offerId, '',
+    o.offerId, o.deficitId || '',
     String(o.date), '', '',
     o.name, o.email, o.agentId, o.queue, o.manager,
     o.sentAt, o.expiresAt, o.holdHours, o.status,
@@ -1815,7 +2671,7 @@ function rvtoCommitWeekBlockToAssembled_(offerId, obj, config) {
  * Mirrors rvtoProcessResponse_ but delegates to rvtoCommitWeekBlockToAssembled_.
  */
 function rvtoProcessWeekBlockResponse_(offerId, action, token) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   if (!sheet) return { ok: false, message: 'Offer system unavailable.' };
 
   const values = sheet.getDataRange().getValues();
@@ -1905,7 +2761,7 @@ function rvtoGetEnabledQueues_(config) {
  * CLEANUP LEGACY TABS
  *************************************************************/
 function cleanupLegacyTabs() {
-  const ss = SpreadsheetApp.getActive();
+  const ss = rvtoGetSpreadsheet_();
   const LEGACY_TABS = [
     'Capacity Raw', 'Schedule Raw', 'Opportunities', 'Candidate Matches',
     'Offers Log', 'Fulfillment Log', 'Audit Log', 'No Fly',
@@ -1942,6 +2798,8 @@ function cleanupLegacyTabs() {
  * SETUP
  *************************************************************/
 function setupRvtoWorkbook() {
+  var boundSpreadsheetId = rvtoEnsureSpreadsheetIdProperty_();
+
   const configSheet          = rvtoGetOrCreate_(RVTO_APP.SHEETS.CONFIG);
   const rosterSheet          = rvtoGetOrCreate_(RVTO_APP.SHEETS.ROSTER);
   const noFlySheet           = rvtoGetOrCreate_(RVTO_APP.SHEETS.NO_FLY);
@@ -1952,52 +2810,62 @@ function setupRvtoWorkbook() {
   const changelogSheet       = rvtoGetOrCreate_(RVTO_APP.SHEETS.CHANGELOG);
 
   const queueToggleRows = RVTO_APP.QUEUE_DEFS.map(function(qd) {
-    return ['QUEUE_ENABLED_' + qd.key, 'TRUE', 'Enable/disable queue: ' + qd.name + ' (' + qd.site + ')'];
+    return ['QUEUE_ENABLED_' + qd.key, 'TRUE',
+      'Off = this queue is ignored. On = bot can offer VTO here. (' + qd.name + ')'];
   });
 
   const queueMinSurplusRows = RVTO_APP.QUEUE_DEFS.map(function(qd) {
-    return ['MIN_SURPLUS_' + qd.key, '', 'Optional: min interpreted net for ' + qd.name + '; blank uses MIN_SURPLUS'];
+    return ['MIN_SURPLUS_' + qd.key, '',
+      'Optional: stricter “how much extra staff counts as surplus” for this queue only. Empty = use MIN_SURPLUS.'];
   });
 
-  // v1.9.7: Optional per-queue HEADROOM_FLOOR override (post-VTO safety floor)
   const queueHeadroomFloorRows = RVTO_APP.QUEUE_DEFS.map(function(qd) {
-    return ['HEADROOM_FLOOR_' + qd.key, '', 'Optional: post-VTO safety floor for ' + qd.name + '; blank uses HEADROOM_FLOOR'];
+    return ['HEADROOM_FLOOR_' + qd.key, '',
+      'Optional: lowest staffing allowed after VTO on this queue. Empty = use HEADROOM_FLOOR.'];
   });
 
   rvtoSetSheetData_(configSheet,
     ['Key', 'Value', 'Notes'],
     [
-      ['TIMEZONE',                      'America/Chicago', 'Timezone for date/time formatting'],
-      ['INTERVAL_SECONDS',              1800,              '30-min staffing intervals'],
-      ['LOOKAHEAD_DAYS',                3,                 'How many days ahead to look for surpluses'],
-      ['SCHEDULE_PULL_HOURS',           78,                'Hours of schedule data to pull (lookahead + buffer)'],
-      ['PAGE_LIMIT',                    500,               'Assembled API page size'],
-      ['VTO_ACTIVITY_NAME',             'VTO',             'Assembled activity type name for VTO (fallback if UUID not set)'],
-      ['EMAIL_SUBJECT_PREFIX',          'VTO Opportunity', 'Subject line prefix for offer emails'],
-      ['EMAIL_FROM_NAME',               'Scheduling Bot',  'Display name for outbound emails'],
-      ['SEND_EMAILS',                   'TRUE',            'Set FALSE to create offers without emailing'],
-      ['ASSEMBLED_COMMIT',              'TRUE',            'Write accepted offers back to Assembled'],
-      ['MIN_SURPLUS',                   1,                 'SURPLUS DETECTION threshold — interpreted net (Assembled net + ramp) must be >= this for an interval to enter the headroom map. Optional per-queue MIN_SURPLUS_<QUEUE_KEY> rows below match QUEUE_ENABLED_* suffix.'],
-      ['HEADROOM_FLOOR',                0,                 'POST-VTO SAFETY floor — net staffing must stay >= this value at every interval the offered rep overlaps. Independent of MIN_SURPLUS. Lower = more offers approved. Default 0 lets a surplus interval drain to zero before the bot stops offering. Per-queue override: HEADROOM_FLOOR_<QUEUE_KEY>.'],
-      ['MIN_BLOCK_MINUTES',             120,               'Minimum surplus block length in minutes to trigger an offer'],
-      ['OFFER_HOLD_HOURS',              1,                 'How long an offer stays open before expiring'],
-      ['MAX_OFFERS_PER_PERSON_PER_DAY', 1,                 'Max offers per rep per calendar day'],
-      ['MAX_EMAILS_PER_24H',            1,                 'Max emails per rep in a rolling 24-hour window'],
-      ['OFFER_MIN_GAP_HOURS',           1,                 'Minimum hours between offers to the same rep (rolling window). Prevents back-to-back trigger runs sending overlapping offers regardless of MAX_EMAILS_PER_24H.'],
-      ['MIN_SCHEDULE_OVERLAP_HOURS',    2,                 'Min hours a rep must overlap the surplus window to be eligible'],
-      ['ASSEMBLED_SITE',                'Consumer Sales',  'Assembled site name for Consumer Sales queues'],
-      ['ASSEMBLED_SITE_SUPPORT',        'Support',         'Assembled site name for Support queues'],
-      ['ASSEMBLED_CHANNEL',             'phone',           'Assembled channel (applies to all sites)'],
-      ['USE_PGC_PRIORITY',              'TRUE',            'Sort eligible reps: no PGC row first, then lowest PGC (Script Properties: PGC_SPREADSHEET_ID)'],
-      ['PGC_DEBUG_TOP_N',               8,                 'PGC_ORDER audit: how many top sorted eligibles to log (0 = off)'],
-      ['WEEK_VTO_MIN_SURPLUS_PCT',    15,                'Min % of a rep\'s scheduled hours that must fall in surplus windows to qualify for a week-block offer (default 15)'],
-      ['MANAGER_VTO_SLACK', 'TRUE', 'Set FALSE to disable Slack DM to manager on VTO commit (requires SLACK_BOT_TOKEN in Script Properties)'],
-      // v1.7.2 Standard VTO toggle
-      ['STANDARD_VTO_ENABLED',          'TRUE',            'Set FALSE to disable the standard intraday VTO trigger (runReverseVto). Week-block VTO runs independently.'],
-      // v1.7.0 Week-Block VTO config rows
-      ['WEEK_VTO_ENABLED',              'FALSE',           'Set TRUE to enable week-block VTO offers (run manually via menu)'],
-      ['WEEK_VTO_START_DATE',           '',                'Week-block VTO start date (yyyy-MM-dd), e.g. 2026-05-05'],
-      ['WEEK_VTO_END_DATE',             '',                'Week-block VTO end date (yyyy-MM-dd), e.g. 2026-05-09'],
+      ['TIMEZONE',                      'America/Chicago', 'Dates and times in emails and the sheet use this zone.'],
+      ['INTERVAL_SECONDS',              1800,              'Assembled staffing is read in this chunk size (1800 = 30 minutes).'],
+      ['LOOKAHEAD_DAYS',                3,                 'How far ahead the normal (intraday) run looks for surpluses.'],
+      ['SCHEDULE_PULL_HOURS',           78,                'How many hours of schedules we pull for the normal run.'],
+      ['VTO_ACTIVITY_NAME',             'VTO',             'Name of the VTO activity in Assembled (if you do not set the activity UUID in Script Properties).'],
+      ['EMAIL_SUBJECT_PREFIX',          'VTO Opportunity', 'Starts every offer subject line.'],
+      ['EMAIL_FROM_NAME',               'Scheduling Bot',  'The “from” name reps see in Gmail.'],
+      ['SEND_EMAILS',                   'TRUE',            'False = still writes offer rows but does not send mail or Slack (dry run).'],
+      ['VTO_OFFER_CHANNEL',             'EMAIL',           'EMAIL = Gmail only. SLACK = DM rep in Slack with Accept/Decline links. BOTH = Slack + email. Needs SLACK_BOT_TOKEN in Script Properties.'],
+      ['VTO_SLACK_FALLBACK_EMAIL',      'TRUE',            'When channel is SLACK and Slack DM fails, try Gmail to the roster email. Ignored for EMAIL-only.'],
+      ['VTO_OFFER_PREVIEW_EMAIL',       '',                'Your address: get a copy of each offer email to proofread. Leave empty to turn off.'],
+      ['VTO_OFFER_PREVIEW_MODE',        'BCC',             'BCC = rep gets the email, you are blind-copied. COPY_ONLY = only you get it (rep does not). OFF = off even if preview email is filled in.'],
+      ['ASSEMBLED_COMMIT',              'TRUE',            'False = Accept still updates the sheet but does not post VTO to Assembled.'],
+      ['MIN_SURPLUS',                   1,                 'Default: how many extra people above forecast count as “surplus” for this bot. Per-queue overrides are below.'],
+      ['RAMP_NET_BOOST_ENABLED',        'TRUE',            'TRUE = Ramp_Inclusion adds effective FTE to Assembled net for surplus (intraday + week/bundle). FALSE = raw API net only (closer to Staffing timeline “Not staffing” without synthetic ramp surplus).'],
+      ['HEADROOM_FLOOR',                0,                 'After VTO, staffing can drop to this level (per queue over the day). Usually 0. Lower = more offers. Per-queue overrides below.'],
+      ['MIN_BLOCK_MINUTES',             120,               'Ignore surplus windows shorter than this (minutes).'],
+      ['OFFER_HOLD_HOURS',              1,                 'How long the rep has to tap Accept before the offer times out.'],
+      ['MAX_OFFERS_PER_PERSON_PER_DAY', 1,                 'Soft cap: max offer “events” per rep per calendar day (bundle email counts as one).'],
+      ['MAX_EMAILS_PER_24H',            1,                 'Soft cap: max offer emails per rep in the last 24 hours.'],
+      ['OFFER_MIN_GAP_HOURS',           1,                 'Wait at least this many hours between sends to the same rep (stops back-to-back spam).'],
+      ['MIN_SCHEDULE_OVERLAP_HOURS',    2,                 'Rep must be on the schedule at least this many hours inside the surplus window.'],
+      ['ASSEMBLED_SITE',                'Consumer Sales',  'Site name in Assembled for the queues in this bot (Consumer Sales).'],
+      ['ASSEMBLED_CHANNEL',             'phone',           'Which channel we read from Assembled (usually phone).'],
+      ['USE_PGC_PRIORITY',              'TRUE',            'True = sort offers using the PGC sheet (Script Property PGC_SPREADSHEET_ID). False = ignore PGC for ordering only. Default columns: A = name, B = pGC; override with Script Properties PGC_NAME_COLUMN / PGC_VALUE_COLUMN (1-based).'],
+      ['PGC_OFFER_CEILING',             '',                'Optional: max PGC from your PGC sheet that can still get an offer (same number scale as the sheet; 85 means 85% and below). Blank = no cap. Reps with no PGC row still qualify. If Audit PGC_LOAD shows 0 names, the cap does nothing until the map loads (fix tab/columns or IMPORTRANGE).'],
+      ['PGC_DEBUG_TOP_N',               8,                 'How many names we log in Audit for “who was first in line” (0 = turn off logging).'],
+      ['WEEK_VTO_MIN_SURPLUS_PCT',      15,                'Week / bundle campaigns: rep must have at least this % of their shift touching surplus.'],
+      ['WEEK_VTO_MAX_SENDS_PER_QUEUE',  '',                'Week / bundle menu: max emails per queue in one run (blank or 0 = unlimited). Stops after N successful sends per queue so one surplus day does not offer every eligible rep in that queue.'],
+      ['MANAGER_VTO_SLACK',             'TRUE',            'True = Slack the manager when someone accepts (needs SLACK_BOT_TOKEN in Script Properties).'],
+      ['STANDARD_VTO_ENABLED',          'TRUE',            'False = turn off the timed intraday run only. Manual week / bundle / single-day menu still works.'],
+      ['INDIVIDUAL_DAY_VTO_ENABLED',    'FALSE',           'True = menu run targets one day only (INDIVIDUAL_DAY_VTO_TARGET_DATE). Pulls Assembled for that day; same offer flow as week-block. Takes precedence over WEEK_VTO_* dates/mode when TRUE.'],
+      ['INDIVIDUAL_DAY_VTO_TARGET_DATE', '',               'Single day to target (yyyy-MM-dd). Required when INDIVIDUAL_DAY_VTO_ENABLED is TRUE.'],
+      ['WEEK_VTO_ENABLED',              'FALSE',           'True = you can run the week / bundle campaign from the menu (unless you use individual-day only).'],
+      ['WEEK_VTO_CAMPAIGN_MODE',        'WEEK_BLOCK',      'WEEK_BLOCK = one email for the whole date range. PICK_DATES = list dates in WEEK_VTO_PICK_DATES. DOW_IN_RANGE = every Mon/Tue/… between start and end.'],
+      ['WEEK_VTO_PICK_DATES',           '',                'Used when mode is PICK_DATES. Comma-separated dates, e.g. 2026-06-05, 2026-06-12'],
+      ['WEEK_VTO_TARGET_DOW',           '',                'Used when mode is DOW_IN_RANGE. 1 = Monday … 7 = Sunday.'],
+      ['WEEK_VTO_START_DATE',           '',                'First day of the week campaign (yyyy-MM-dd).'],
+      ['WEEK_VTO_END_DATE',             '',                'Last day of the week campaign (yyyy-MM-dd).'],
     ].concat(queueToggleRows).concat(queueMinSurplusRows).concat(queueHeadroomFloorRows)
   );
 
@@ -2030,35 +2898,172 @@ function setupRvtoWorkbook() {
   rvtoPreserveSheet_(auditSheet,
     ['Timestamp', 'Event', 'Reference ID', 'Details', 'Result']);
 
-  rvtoSetupChangelog_(changelogSheet);
+  var changelogResult = rvtoSetupChangelog_(changelogSheet);
   rvtoFormatSheets_();
-  rvtoAudit_('SETUP', '', 'Workbook setup complete (v1.9.7)', 'OK');
+  try { rvtoInstallOfferAlertTrigger_(); } catch (triggerErr) { /* non-fatal */ }
+  rvtoAudit_('SETUP', '', 'Workbook setup complete (v1.11.3)', 'OK');
 
   SpreadsheetApp.getUi().alert([
-    'Targeted VTO Bot v1.9.7 workbook setup complete.',
+    'Targeted VTO Bot v1.11.3 workbook setup complete.',
+    changelogResult.added > 0
+      ? ('Changelog: added ' + changelogResult.added + ' missing version row(s) (' + changelogResult.total + ' total).')
+      : ('Changelog: up to date (' + changelogResult.total + ' entries).'),
     '',
     'Next steps:',
-    '1. Set Script Properties: ASSEMBLED_API_KEY, RVTO_WEB_APP_URL, ASSEMBLED_VTO_ACTIVITY_ID',
-    '   Optional: PGC_SPREADSHEET_ID (+ PGC_SHEET_NAME) for PGC-based offer ordering',
+    '1. Set Script Properties: ASSEMBLED_API_KEY, RVTO_WEB_APP_URL, RVTO_SPREADSHEET_ID, ASSEMBLED_VTO_ACTIVITY_ID, SLACK_BOT_TOKEN (for Slack offers / manager notify)',
+    boundSpreadsheetId
+      ? ('   RVTO_SPREADSHEET_ID saved: ' + boundSpreadsheetId + ' (web app Accept/Decline will use this workbook).')
+      : '   WARNING: RVTO_SPREADSHEET_ID was not saved — open this file and run Setup again.',
+    '   Optional: PGC_SPREADSHEET_ID only if PGC lives in another file; else bot uses this workbook’s "PGC" tab.',
+    '   PGC columns default to A=name, B=pGC. Legacy Looker B+G: PGC_NAME_COLUMN=2, PGC_VALUE_COLUMN=7.',
     '2. Populate the Roster sheet',
     '3. Deploy as web app (execute as: me, anyone can access)',
     '4. Set a time-based trigger on runReverseVto()',
     '',
-    'v1.9.7: HEADROOM_FLOOR (default 0) split out from MIN_SURPLUS so',
-    '  week-block offers can actually drain a surplus interval. Existing',
-    '  deployments will see the new row added with default 0 — week-block',
-    '  runs will immediately approve more offers per chokepoint.',
-    '  Per-queue override: HEADROOM_FLOOR_<QUEUE_KEY>.',
+    'v1.11.3: Week/bundle headroom only deducts outstanding offers on the day(s) they cover — fixes zero sends after prior PICK_DATES days.',
+    '',
+    'v1.11.2: Web app uses RVTO_SPREADSHEET_ID (openById) — run Setup once if Accept links said Offer not found.',
+    '',
+    'v1.11.0: VTO_OFFER_CHANNEL (EMAIL / SLACK / BOTH) + VTO_SLACK_FALLBACK_EMAIL — Slack DMs with I\'ll take it! / No thanks links (same web app as email).',
+    '',
+    'v1.10.10: INDIVIDUAL_DAY_VTO_ENABLED + INDIVIDUAL_DAY_VTO_TARGET_DATE — one-day menu campaign (Assembled pull for that day only).',
+    '',
+    'v1.10.9: PGC_LOAD merges from this workbook\'s "PGC" tab when the external PGC file has 0 usable rows (IMPORTRANGE on bound tab).',
+    '',
+    'v1.10.8: PGC_LOAD retries tab "PGC" when the configured/first tab has 0 usable rows; WARN if map still empty while ceiling/priority needs data.',
+    '',
+    'v1.10.7: WEEK_VTO_MAX_SENDS_PER_QUEUE — cap bundle/week emails per queue per menu run (0 = unlimited).',
+    '',
+    'v1.10.6: PGC loads from this workbook’s "PGC" tab when PGC_SPREADSHEET_ID is blank (IMPORTRANGE-backed tab works).',
+    '',
+    'v1.10.5: RAMP_NET_BOOST_ENABLED — set FALSE to use raw Assembled net for surplus (no Ramp_Inclusion boost; closer to Staffing timeline).',
+    '',
+    'v1.10.4: PGC sheet defaults to columns A (name) and B (pGC %). Looker B+G: set PGC_NAME_COLUMN=2, PGC_VALUE_COLUMN=7.',
+    '',
+    'v1.10.3: PGC_OFFER_CEILING — optional cap so only reps at or below that PGC get offers (unknown PGC still qualifies).',
+    '',
+    'v1.10.2: Config is shorter (Consumer Sales queues only; friendlier Notes).',
+    '  Re-run Setup to refresh the Config tab text. Add Support queues back in code if needed.',
+    '',
+    'v1.10.1: VTO_OFFER_PREVIEW_EMAIL + VTO_OFFER_PREVIEW_MODE (BCC or COPY_ONLY)',
+    '  to see exact offer emails for intraday, full-week, and bundle campaigns.',
   ].join('\n'));
 }
 
 /*************************************************************
  * CHANGELOG SETUP
  *************************************************************/
-function rvtoSetupChangelog_(sheet) {
-  const headers = ['Version', 'Date', 'Author', 'Change Summary', 'Impact', 'Status'];
 
-  const history = [
+function rvtoNormalizeChangelogVersion_(v) {
+  return String(v || '').trim().toLowerCase();
+}
+
+/**
+ * Inserts script changelog rows that are not already on the sheet (by Version).
+ * New rows go directly under the header, newest first (matches rvtoGetChangelogHistory_ order).
+ * Returns { added, total }.
+ */
+function rvtoSyncChangelogMissingRows_(sheet, headers, history) {
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+
+  var existing = {};
+  var lastRow  = sheet.getLastRow();
+  if (lastRow > 1) {
+    var versionCol = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < versionCol.length; i++) {
+      var key = rvtoNormalizeChangelogVersion_(versionCol[i][0]);
+      if (key) existing[key] = true;
+    }
+  }
+
+  var toAdd = [];
+  for (var h = 0; h < history.length; h++) {
+    var verKey = rvtoNormalizeChangelogVersion_(history[h][0]);
+    if (verKey && !existing[verKey]) toAdd.push(history[h]);
+  }
+
+  if (!toAdd.length) {
+    return { added: 0, total: Math.max(0, lastRow - 1) };
+  }
+
+  sheet.insertRowsAfter(1, toAdd.length);
+  sheet.getRange(2, 1, toAdd.length, headers.length).setValues(toAdd);
+  SpreadsheetApp.flush();
+
+  return { added: toAdd.length, total: sheet.getLastRow() - 1 };
+}
+
+/** Canonical changelog rows (newest first). Single source for the Changelog tab. */
+function rvtoGetChangelogHistory_() {
+  return [
+    ['v1.11.3', '2026-06-16', 'Bobby Sorrell',
+     'FIX: rvtoBuildHeadroomMap_ pre-deducted active WEEK_VTO sheet rows against every surplus interval in the map, even when the offer was for a different calendar day. After a multi-day PICK_DATES campaign, SENT rows for 6/16–6/18 wrongly drained 6/19 headroom for reps still scheduled that day (large College queue → zero bundle sends despite Assembled surplus). New rvtoWeekBlockOfferDayKeys_(); deductions are scoped to the offer\'s Date / Notes Days. College workGroupPattern adds Col-STEM and College and Grad. Bundle runs emit WEEK_BLOCK_BUNDLE_QUEUE_SUMMARY when eligible>0 but sends=0.',
+     'Re-run 6/19 (or any pick date) after prior-day bundle offers without false headroom starvation. Audit tab shows per-queue skip tallies when a queue sends nothing.',
+     'Released'],
+    ['v1.11.2', '2026-05-26', 'Bobby Sorrell',
+     'FIX: Accept/Decline web app returned "Offer not found" when offers existed on the Offers tab. Replaced SpreadsheetApp.getActive() with rvtoGetSpreadsheet_() (openById via Script Property RVTO_SPREADSHEET_ID) for all sheet I/O including doGet. setupRvtoWorkbook() calls rvtoEnsureSpreadsheetIdProperty_() to persist this file\'s ID when run from the bound workbook.',
+     'Redeploying the web app alone does not fix lookup — set RVTO_SPREADSHEET_ID (auto on Setup) so headless runs read the same workbook where offers are written.',
+     'Released'],
+    ['v1.11.1', '2026-05-20', 'Bobby Sorrell',
+     'FIX: Changelog tab sync — rvtoSetupChangelog_ and menu Sync Changelog append versions from script that are missing on the sheet (previously only populated an empty tab; existing tabs stopped at first setup). New rows insert below header, newest first.',
+     'Operators see v1.10+ and Slack release notes on the Changelog tab without hand-copying from the .gs file.',
+     'Released'],
+    ['v1.11.0', '2026-05-20', 'Bobby Sorrell',
+     'NEW: Rep-facing Slack VTO offers. Config VTO_OFFER_CHANNEL (EMAIL default, SLACK, BOTH) and VTO_SLACK_FALLBACK_EMAIL (default TRUE). rvtoDeliverIntradayOffer_, rvtoDeliverWeekBlockOffer_, rvtoDeliverWeekVtoBundleOffer_ route to rvtoSendOfferSlack* plus existing Gmail templates. Slack uses mrkdwn links to the same RVTO_WEB_APP_URL Accept/Decline URLs. COPY_ONLY preview DMs the operator (lookup on VTO_OFFER_PREVIEW_EMAIL). Audit: SEND_SLACK, SEND_OFFER (when Slack channel active).',
+     'Reps can accept VTO from Slack without opening email; operators can pilot SLACK or BOTH before cutting over from Gmail.',
+     'Released'],
+    ['v1.10.10', '2026-05-14', 'Bobby Sorrell',
+     'NEW: Config INDIVIDUAL_DAY_VTO_ENABLED (default FALSE) and INDIVIDUAL_DAY_VTO_TARGET_DATE (yyyy-MM-dd). When enabled, rvtoResolveWeekBlockCampaignDates_ returns a one-day WEEK_BLOCK span for that date; runWeekBlockVto allows the menu when WEEK_VTO_ENABLED or INDIVIDUAL_DAY_VTO_ENABLED is TRUE. Individual mode takes precedence over WEEK_VTO_CAMPAIGN_MODE and week/bundle date fields. Menu label: Run Week / Single-Day VTO.',
+     'Operators can run a targeted single-day surplus campaign without configuring WEEK_VTO_START_DATE, END_DATE, or campaign mode.',
+     'Released'],
+    ['v1.10.9', '2026-05-13', 'Bobby Sorrell',
+     'PGC: if Script Property PGC_SPREADSHEET_ID opens a file that yields 0 usable name/PGC rows after the same-file PGC-tab retry, rvtoLoadPgcMap_ reads the bound (active) workbook tab "PGC" and merges into the map when that spreadsheet differs from the external id. PGC_LOAD audit uses src active_workbook_merged and tab text notes bound merge.',
+     'Supports Looker export ID + live IMPORTRANGE PGC on the bot workbook without clearing properties.',
+     'Released'],
+    ['v1.10.8', '2026-05-13', 'Bobby Sorrell',
+     'PGC: rvtoMergePgcRowsIntoMap_ helper; rvtoLoadPgcMap_ after reading the primary sheet, if the map is still empty, re-read tab "PGC" when it exists and is a different sheet. Audit tab field notes fallback. If map is still empty and USE_PGC_PRIORITY or PGC_OFFER_CEILING expects data, PGC_LOAD is WARN explaining ceiling/sort are inactive until rows load.',
+     'Fixes empty "Data" tab + populated "PGC" tab; makes misconfiguration visible in Audit.',
+     'Released'],
+    ['v1.10.7', '2026-05-13', 'Bobby Sorrell',
+     'NEW: Config WEEK_VTO_MAX_SENDS_PER_QUEUE (0/blank = unlimited). In rvtoRunWeekBlockBundle_ and rvtoRunWeekBlock_, after each successful send (or dry-run row write) for a queue, increment a counter; when it reaches N, stop processing further eligible reps for that queue only. Audit lines WEEK_BLOCK_BUNDLE or WEEK_BLOCK_RUN note the cap.',
+     'Prevents one campaign run from emailing every qualifying rep in a large queue (e.g. ELD) when surplus is thin.',
+     'Released'],
+    ['v1.10.6', '2026-05-13', 'Bobby Sorrell',
+     'PGC load: if Script Property PGC_SPREADSHEET_ID is omitted, rvtoLoadPgcMap_ uses the active bound spreadsheet. If PGC_SHEET_NAME is also omitted and the opened file is that workbook, the tab named "PGC" is preferred (else first tab). External Looker exports still set PGC_SPREADSHEET_ID. PGC_LOAD audit includes tab name and active_workbook vs external_id.',
+     'PGC tab with IMPORTRANGE (same workbook) works without copying IDs into Script Properties.',
+     'Released'],
+    ['v1.10.5', '2026-05-13', 'Bobby Sorrell',
+     'NEW: Config RAMP_NET_BOOST_ENABLED (default TRUE). Surplus/deficit math in rvtoFindDeficits_ and rvtoFindWeekBlockSurplusDays_ uses net = Assembled API net + ramp share only when TRUE. FALSE ignores Ramp_Inclusion for net staffing (raw API net), aligning bundle/intraday detection with Assembled Staffing timeline when ramp cohorts should not create synthetic surplus. RAMP_INCLUSION audit line states whether boost is applied.',
+     'Operators can reconcile VTO offers against timeline “Not staffing” without deactivating ramp rows.',
+     'Released'],
+    ['v1.10.4', '2026-05-13', 'Bobby Sorrell',
+     'PGC import: rvtoLoadPgcMap_ now defaults to column A for rep name and column B for pGC (matches in-workbook "PGC" tab with percentage-formatted cells). Optional Script Properties PGC_NAME_COLUMN and PGC_VALUE_COLUMN (1-based integers) override layout; use 2 and 7 for the previous hardcoded Looker export (name B, PGC G). Header-like name cells (e.g. "Sales Rep") are skipped.',
+     'Works with the operator PGC sheet layout without manual column copies.',
+     'Released'],
+    ['v1.10.3', '2026-05-13', 'Bobby Sorrell',
+     'NEW: Config PGC_OFFER_CEILING — optional maximum PGC (same scale as Looker PGC sheet) for intraday and week/bundle eligibility. Reps with numeric PGC strictly above the ceiling are excluded; reps with no PGC row still qualify. rvtoLoadPgcMap_ loads when ceiling is set even if USE_PGC_PRIORITY is FALSE. ELIGIBILITY_DEBUG and WEEK_BLOCK_ELIGIBILITY audit lines include pgcAboveCeiling count.',
+     'Operators can cap who receives VTO without changing the source sheet.',
+     'Released'],
+    ['v1.10.2', '2026-05-13', 'Bobby Sorrell',
+     'CONFIG: QUEUE_DEFS trimmed to six Consumer Sales queues only (Support chat/phone queues removed from this deployment). Removed unused PAGE_LIMIT config row and ASSEMBLED_SITE_SUPPORT (no Support-site queues). Rewrote all Setup Workbook Config Notes in plain language; per-queue rows say the same thing in fewer words.',
+     'Smaller Config tab; easier for operators to scan. Re-run Setup Workbook to refresh rows (existing workbooks keep old keys until setup is re-run).',
+     'Released'],
+    ['v1.10.1', '2026-05-13', 'Bobby Sorrell',
+     'NEW: Operator offer preview — Config VTO_OFFER_PREVIEW_EMAIL and VTO_OFFER_PREVIEW_MODE. All three outbound templates (intraday rvtoSendOfferEmail_, legacy week-block rvtoSendWeekBlockOfferEmail_, bundle rvtoSendWeekVtoBundleEmail_) call rvtoSendOfferGmailWithPreview_. BCC mode: rep receives normal To email, preview address on BCC. COPY_ONLY: single email to preview only with yellow banner and subject prefix [VTO preview INTRADAY|WEEK_BLOCK_WEEK|WEEK_BLOCK_BUNDLE]; rep is not emailed (links still commit for rep). OFF or blank email disables. Audit lines append preview suffix.',
+     'Operators can verify exact HTML and links per offer type without relying on reps to forward.',
+     'Released'],
+    ['v1.10.0', '2026-05-13', 'Bobby Sorrell',
+     'NEW: Week VTO bundle campaign mode (WEEK_VTO_CAMPAIGN_MODE). PICK_DATES uses WEEK_VTO_PICK_DATES (comma yyyy-MM-dd). DOW_IN_RANGE uses WEEK_VTO_START_DATE, WEEK_VTO_END_DATE, WEEK_VTO_TARGET_DOW (1=Mon..7=Sun). One Gmail lists each qualifying surplus day with separate Accept/Decline links; each day is its own Offers row (RVTO_WK + Notes BUNDLE_ID=). Reuses surplus, eligibility, headroom, and week-block commit. rvtoBuildOfferHistory_ counts each bundle once toward MAX_OFFERS_PER_PERSON_PER_DAY and MAX_EMAILS_PER_24H by Sent At day; OFFER_MIN_GAP_HOURS enforced in rvtoRunWeekBlockBundle_. Per-day DECLINED does not trigger the global 24h decline freeze. rvtoHasPriorWeekBlockOffer_ parses single-date Date column. rvtoAppendWeekBlockOfferRow_ writes BUNDLE_ID and optional Deficit ID column.',
+     'Operators can target specific dates or recurring weekdays without forcing a full unpaid week; caps align with intraday offer throttles.',
+     'Released'],
+    ['v1.9.9', '2026-05-12', 'Bobby Sorrell',
+     'FIX: v1.9.8\'s cross-run week-block dedup missed all EXPIRED prior offers. rvtoHasPriorWeekBlockOffer_() identified week-block rows by looking for "WEEK_VTO" in the Notes column, but expireRvtoOffers_() overwrites Notes with "Expired after hold window." on expiry, erasing the tag. First v1.9.8 production campaign (5/12) re-offered the same week (2026-05-24 to 2026-05-30) to Matthew McCarthy, Tonia Turner, and David Iradji — all three had prior 5/7 offers that had EXPIRED with clobbered Notes. Two changes: (1) rvtoHasPriorWeekBlockOffer_() now identifies week-block rows by Offer ID prefix RVTO_APP.WEEK_BLOCK_PREFIX ("RVTO_WK") with Notes tag as secondary signal — Offer ID is immutable and matches doGet() routing; (2) expireRvtoOffers_() now APPENDS " | Expired after hold window." to existing Notes instead of overwriting, so the WEEK_VTO tag, Days: list, and Blocks: schedule survive expiry.',
+     'Cross-run week-block dedup now actually works. Reps whose prior offer expired without response are correctly skipped on follow-up campaigns. Notes preservation also makes the Offers sheet useful for post-mortem review of expired offers — the original day list and schedule blocks remain visible.',
+     'Released'],
+    ['v1.9.8', '2026-05-12', 'Bobby Sorrell',
+     'FIX: Week-block VTO had no cross-run de-dup for prior offers. A rep who received a week-block offer that subsequently EXPIRED (or SENT with no response, DECLINED, ACCEPTED, COMMITTED, COMMIT_FAILED) would still be re-offered the same week on a later campaign because rvtoBuildOfferHistory_() explicitly skips WEEK_VTO rows from the cap tracker, and weekBlockSentThisRun only de-dups within a single execution. Running back-to-back campaigns for overlapping weeks therefore duplicated offers to the same reps. New helper rvtoHasPriorWeekBlockOffer_() scans ctx.offerObjects for any WEEK_VTO row for the rep whose date range (parsed from the Date column "yyyy-MM-dd to yyyy-MM-dd", with a Days: fallback in Notes) overlaps the new target range. Match is skipped with a WEEK_BLOCK_DUPLICATE_SKIP audit row logging the prior offer ID, prior date range, and prior status. SEND_FAILED and blank-status rows are ignored — those represent failed deliveries, the rep never actually received the offer.',
+     'Prevents duplicate week-block offers across consecutive campaigns. Reps who got a prior week-block offer for an overlapping week are now filtered out before headroom and eligibility checks, regardless of whether they responded.',
+     'Released'],
     ['v1.9.7', '2026-05-07', 'Bobby Sorrell',
      'FIX: Week-block headroom gate was conflating MIN_SURPLUS (surplus DETECTION threshold) with the post-VTO safety floor. The check `(entry.net - 1) < minSurplus` made it impossible to ever offer VTO that touched an interval at exactly the surplus threshold — every +2 (or +3 for ELD) interval was an instant chokepoint. With dozens of +2/+2.x dips in a typical week, virtually no rep could pass even when the bulk of the week had +5 to +16 net headroom. Symptom: 84 candidates passed eligibility, only 1 offer sent for 5/24-5/30. Added new HEADROOM_FLOOR config (default 0) controlling only the post-VTO safety floor, with optional HEADROOM_FLOOR_<QUEUE_KEY> per-queue overrides matching the MIN_SURPLUS pattern. New helper rvtoEffectiveHeadroomFloorForQueue_(). rvtoRepCanFitInHeadroom_ now takes headroomFloor as a parameter and uses it in the comparison; audit row format updated to log surplusFloor + headroomFloor side by side. WEEK_BLOCK_HEADROOM "Initial headroom" log now includes both numbers.',
      'Week-block runs immediately approve far more offers per chokepoint. With HEADROOM_FLOOR=0 a +2 surplus interval can absorb 2 reps (drains to +1, then 0, then blocks the 3rd); a +5 interval can absorb 5. Standard intraday runReverseVto() unaffected — uses its own surplus block detection, not the headroom map.',
@@ -2225,12 +3230,17 @@ function rvtoSetupChangelog_(sheet) {
      'Enables bulk week-off VTO offers during low-demand periods without disrupting the normal per-surplus offer flow.',
      'Released']
   ];
+}
+
+function rvtoSetupChangelog_(sheet) {
+  const headers = ['Version', 'Date', 'Author', 'Change Summary', 'Impact', 'Status'];
+  const history = rvtoGetChangelogHistory_();
 
   if (sheet.getLastRow() <= 1) {
     rvtoSetSheetData_(sheet, headers, history);
-  } else {
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    return { added: history.length, total: history.length };
   }
+  return rvtoSyncChangelogMissingRows_(sheet, headers, history);
 }
 
 /*************************************************************
@@ -2348,7 +3358,7 @@ function rvtoFindDeficits_(ctx) {
         const scheduled = rvtoNum_(it.staffing_scheduled);
         const required  = rvtoNum_(it.staffing_required && it.staffing_required.forecasted);
         const netRaw    = rvtoIsNum_(it.staffing_net) ? Number(it.staffing_net) : (scheduled - required);
-        const rampBoost = rvtoRampNetBoostPerQueue_(startTime, endTime, ctx, ctx.enabledQueues.length);
+        const rampBoost = rvtoEffectiveRampBoostForInterval_(startTime, endTime, ctx);
         const net         = netRaw + rampBoost;
 
         rawIntervals.push({
@@ -2649,10 +3659,12 @@ function rvtoFindEligible_(deficit, roster, schedIdx, ctx) {
   const queueDef         = RVTO_APP.QUEUE_DEFS.filter(function(qd) { return qd.name === deficit.queue; })[0];
   const workGroupPattern = queueDef ? queueDef.workGroupPattern : '';
   const shadowEmails     = ctx.shadowExclusionEmails || new Set();
+  const pgcCeiling       = rvtoPgcOfferCeilingFromConfig_(ctx.config);
+  const pgcMapForCeiling = ctx.pgcByNormalizedName || {};
 
   const selectedThisRun = ctx.selectedThisRun || (ctx.selectedThisRun = new Set());
   const eligible        = [];
-  var debugCounts       = { noEmail: 0, queueMismatch: 0, noFly: 0, shadowExcluded: 0, notScheduled: 0, tooManyOffers: 0, passed: 0 };
+  var debugCounts       = { noEmail: 0, queueMismatch: 0, noFly: 0, shadowExcluded: 0, pgcAboveCeiling: 0, notScheduled: 0, tooManyOffers: 0, passed: 0 };
 
   roster.forEach(function(person) {
     const email = (person.email || '').trim().toLowerCase();
@@ -2660,6 +3672,10 @@ function rvtoFindEligible_(deficit, roster, schedIdx, ctx) {
     if (!rvtoWorkGroupMatches_(person.workGroup, workGroupPattern)) { debugCounts.queueMismatch++; return; }
     if (noFlySet.has(rvtoNormalizeName_(person.name))) { debugCounts.noFly++; return; }
     if (shadowEmails.has(email)) { debugCounts.shadowExcluded++; return; }
+    if (pgcCeiling !== null && !rvtoRepPassesPgcOfferCeiling_(person.name, pgcMapForCeiling, pgcCeiling)) {
+      debugCounts.pgcAboveCeiling++;
+      return;
+    }
 
     if (!rvtoHasScheduleOverlap_(email, deficit.startTime, deficit.endTime, schedIdx, minOverlapHours)) {
       debugCounts.notScheduled++;
@@ -2708,6 +3724,7 @@ function rvtoFindEligible_(deficit, roster, schedIdx, ctx) {
     ' | queueMismatch: ' + debugCounts.queueMismatch +
     ' | noFly: ' + debugCounts.noFly +
     ' | shadowExcluded: ' + debugCounts.shadowExcluded +
+    ' | pgcAboveCeiling: ' + debugCounts.pgcAboveCeiling +
     ' | notScheduled: ' + debugCounts.notScheduled +
     ' | tooManyOffers: ' + debugCounts.tooManyOffers +
     ' | passed: ' + debugCounts.passed,
@@ -2946,7 +3963,7 @@ function rvtoPullSchedulesForDateRange_(ctx, rangeStart, rangeEnd) {
  * ROSTER READER
  *************************************************************/
 function rvtoGetRoster_(ctx) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.ROSTER);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.ROSTER);
   if (!sheet) return [];
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) return [];
@@ -2978,8 +3995,337 @@ function rvtoDeriveEmail_(name) {
 }
 
 /*************************************************************
- * OFFER EMAIL
+ * OFFER DELIVERY — Slack + channel router (v1.11.0)
  *************************************************************/
+
+/**
+ * EMAIL (default) | SLACK | BOTH. Unknown values default to EMAIL.
+ */
+function rvtoGetOfferChannelSettings_(config) {
+  var raw = String((config && config.VTO_OFFER_CHANNEL) || 'EMAIL').trim().toUpperCase();
+  var slack = (raw === 'SLACK' || raw === 'BOTH');
+  var email = (raw === 'EMAIL' || raw === 'BOTH' || raw === '' || raw === 'GMAIL');
+  if (!slack && !email) email = true;
+  return {
+    email:              email,
+    slack:              slack,
+    slackFallbackEmail: rvtoConfigBool_(config && config.VTO_SLACK_FALLBACK_EMAIL, true)
+  };
+}
+
+/** First token of roster/display name for Slack greetings. */
+function rvtoFirstName_(fullName) {
+  var parts = String(fullName || '').trim().split(/\s+/);
+  return parts.length ? parts[0] : 'there';
+}
+
+/** Slack mrkdwn hyperlink: <url|label> */
+function rvtoSlackMrkdwnLink_(url, label) {
+  var u = String(url || '').trim();
+  if (!u) return String(label || '').trim();
+  var lbl = String(label || 'link').replace(/\|/g, '/').replace(/</g, '').replace(/>/g, '');
+  return '<' + u + '|' + lbl + '>';
+}
+
+/**
+ * Rep DM, or operator DM when VTO_OFFER_PREVIEW_MODE is COPY_ONLY.
+ * Returns { userId, preview, targetEmail } or null.
+ */
+function rvtoResolveSlackRecipientForOffer_(repEmail, config) {
+  var rep = String(repEmail || '').trim().toLowerCase();
+  if (!rep) return null;
+  var pv = rvtoGetOfferPreviewSettings_(config || {});
+  if (pv.active && pv.mode === 'COPY_ONLY') {
+    var previewId = rvtoGetSlackUserId_(pv.email);
+    if (!previewId) return null;
+    return { userId: previewId, preview: true, targetEmail: pv.email };
+  }
+  var userId = rvtoGetSlackUserId_(rep);
+  if (!userId) return null;
+  return { userId: userId, preview: false, targetEmail: rep };
+}
+
+function rvtoOfferDeliverySucceeded_(slackOk, emailOk, ch) {
+  if (ch.slack && ch.email) return !!(slackOk || emailOk);
+  if (ch.slack) return !!(slackOk || (ch.slackFallbackEmail && emailOk));
+  return !!emailOk;
+}
+
+function rvtoOfferDeliveryDetail_(ch, slackOk, emailOk, extra) {
+  var parts = [];
+  if (ch.slack) parts.push('slack=' + (slackOk ? 'OK' : 'fail'));
+  if (ch.email) parts.push('email=' + (emailOk ? 'OK' : 'fail'));
+  if (extra) parts.push(extra);
+  return parts.join(' | ');
+}
+
+/**
+ * Sends intraday / week / bundle offer to rep (or preview recipient).
+ * Returns true if chat.postMessage succeeded.
+ */
+function rvtoSendOfferSlackDm_(opts) {
+  var config   = opts.config || {};
+  var repEmail = String(opts.repEmail || opts.email || '').trim().toLowerCase();
+  var message  = String(opts.message || '').trim();
+  var refId    = String(opts.refId || opts.offerId || opts.bundleId || '').trim();
+  var kind     = String(opts.offerKind || 'VTO');
+  if (!message) return false;
+
+  var recipient = rvtoResolveSlackRecipientForOffer_(repEmail, config);
+  if (!recipient || !recipient.userId) {
+    rvtoAudit_('SEND_SLACK', refId,
+      'No Slack user for ' + (recipient && recipient.preview ? 'preview ' : '') + repEmail +
+      ' (users.lookupByEmail — check SLACK_BOT_TOKEN and roster email)',
+      'FAILED');
+    return false;
+  }
+
+  if (recipient.preview) {
+    message = '*[VTO offer preview — ' + kind + ']*\n' +
+      'Preview only — consultant *' + repEmail + '* was *not* DM’d. Links bind to their offer row.\n\n' +
+      message;
+  }
+
+  var ok = rvtoSendSlackDmReturningOk_(recipient.userId, message);
+  var dest = recipient.preview ? ('preview ' + recipient.targetEmail) : repEmail;
+  rvtoAudit_('SEND_SLACK', refId,
+    (ok ? 'Slack DM to ' : 'Slack DM failed for ') + dest + ' [' + kind + ']' +
+      (recipient.preview ? ' (COPY_ONLY)' : ''),
+    ok ? 'OK' : 'FAILED');
+  return ok;
+}
+
+function rvtoSendOfferSlackIntraday_(opts) {
+  var config      = opts.config;
+  var tz          = config.TIMEZONE || 'America/Chicago';
+  var prefix      = config.EMAIL_SUBJECT_PREFIX || 'VTO Opportunity';
+  var first       = rvtoFirstName_(opts.name);
+  var dateDisplay = rvtoFormatDateDisplay_(opts.date, tz);
+  var timeDisplay = rvtoFormatTimeRange_(opts.date, opts.start, opts.end, tz);
+  var expiresStr  = Utilities.formatDate(opts.expiresAt, tz, "EEE, MMM d 'at' h:mm a") + ' CT';
+  var acceptLink  = opts.acceptUrl  ? rvtoSlackMrkdwnLink_(opts.acceptUrl,  "I'll take it!") : '';
+  var declineLink = opts.declineUrl ? rvtoSlackMrkdwnLink_(opts.declineUrl, 'No thanks') : '';
+  var actionLine  = [acceptLink, declineLink].filter(Boolean).join('  |  ');
+
+  var message = [
+    '*' + prefix + '* — ' + dateDisplay + ', ' + timeDisplay,
+    'Hi ' + first + ', voluntary time off is available. Respond before *' + expiresStr + '*.',
+    actionLine
+  ].filter(Boolean).join('\n');
+
+  return rvtoSendOfferSlackDm_({
+    config:    config,
+    repEmail:  opts.email,
+    refId:     opts.offerId,
+    offerKind: 'INTRADAY',
+    message:   message
+  });
+}
+
+function rvtoSendOfferSlackWeekBlock_(opts) {
+  var config       = opts.config;
+  var tz           = opts.timezone || config.TIMEZONE || 'America/Chicago';
+  var prefix       = config.EMAIL_SUBJECT_PREFIX || 'VTO Opportunity';
+  var first        = rvtoFirstName_(opts.name);
+  var startDisplay = rvtoFormatDateDisplay_(opts.startDateStr, tz);
+  var endDisplay   = rvtoFormatDateDisplay_(opts.endDateStr,   tz);
+  var expiresStr   = Utilities.formatDate(opts.expiresAt, tz, "EEE, MMM d 'at' h:mm a") + ' CT';
+  var dayLines     = (opts.scheduledDays || []).map(function(d) {
+    return '• ' + rvtoFormatDateDisplay_(d, tz);
+  }).join('\n');
+  var acceptLink   = opts.acceptUrl  ? rvtoSlackMrkdwnLink_(opts.acceptUrl,  "I'll take it!") : '';
+  var declineLink  = opts.declineUrl ? rvtoSlackMrkdwnLink_(opts.declineUrl, 'No thanks') : '';
+  var actionLine   = [acceptLink, declineLink].filter(Boolean).join('  |  ');
+
+  var message = [
+    '*' + prefix + '* — ' + startDisplay + ' – ' + endDisplay,
+    'Hi ' + first + ', full-week VTO is available:',
+    dayLines,
+    'Respond before *' + expiresStr + '*.',
+    actionLine
+  ].filter(Boolean).join('\n');
+
+  return rvtoSendOfferSlackDm_({
+    config:    config,
+    repEmail:  opts.email,
+    refId:     opts.offerId,
+    offerKind: 'WEEK_BLOCK_WEEK',
+    message:   message
+  });
+}
+
+function rvtoSendOfferSlackBundle_(opts) {
+  var config     = opts.config;
+  var tz         = opts.timezone || config.TIMEZONE || 'America/Chicago';
+  var prefix     = config.EMAIL_SUBJECT_PREFIX || 'VTO Opportunity';
+  var first      = rvtoFirstName_(opts.name);
+  var expiresStr = Utilities.formatDate(opts.expiresAt, tz, "EEE, MMM d 'at' h:mm a") + ' CT';
+  var dayLines   = (opts.dayOffers || []).map(function(d) {
+    var disp = rvtoFormatDateDisplay_(d.dayStr, tz);
+    var acc  = d.acceptUrl ? rvtoSlackMrkdwnLink_(d.acceptUrl, "I'll take it!") : '';
+    return '• ' + disp + (acc ? '  ' + acc : '');
+  }).join('\n');
+
+  var message = [
+    '*' + prefix + '*',
+    'Hi ' + first + ', voluntary time off is available:',
+    dayLines,
+    'Respond before *' + expiresStr + '*.'
+  ].join('\n');
+
+  return rvtoSendOfferSlackDm_({
+    config:    config,
+    repEmail:  opts.email,
+    refId:     opts.bundleId || '',
+    offerKind: 'WEEK_BLOCK_BUNDLE',
+    message:   message
+  });
+}
+
+/** Intraday: routes to Slack and/or email per VTO_OFFER_CHANNEL. */
+function rvtoDeliverIntradayOffer_(opts) {
+  var config     = opts.config;
+  var ch         = rvtoGetOfferChannelSettings_(config);
+  var slackOk    = false;
+  var emailOk    = false;
+  var triedEmail = false;
+
+  if (ch.slack) slackOk = rvtoSendOfferSlackIntraday_(opts);
+  if (ch.email) {
+    triedEmail = true;
+    emailOk = rvtoSendOfferEmail_(opts);
+  }
+  if (ch.slack && !slackOk && ch.slackFallbackEmail && !emailOk && !triedEmail) {
+    emailOk = rvtoSendOfferEmail_(opts);
+    triedEmail = true;
+  }
+
+  var sent = rvtoOfferDeliverySucceeded_(slackOk, emailOk, ch);
+  if (ch.slack) {
+    rvtoAudit_('SEND_OFFER', opts.offerId,
+      rvtoOfferDeliveryDetail_(ch, slackOk, emailOk, 'intraday') + rvtoOfferPreviewAuditSuffix_(config),
+      sent ? 'OK' : 'FAILED');
+  }
+  return sent;
+}
+
+/** Week-block full range. */
+function rvtoDeliverWeekBlockOffer_(opts) {
+  var config     = opts.config;
+  var ch         = rvtoGetOfferChannelSettings_(config);
+  var slackOk    = false;
+  var emailOk    = false;
+  var triedEmail = false;
+
+  if (ch.slack) slackOk = rvtoSendOfferSlackWeekBlock_(opts);
+  if (ch.email) {
+    triedEmail = true;
+    emailOk = rvtoSendWeekBlockOfferEmail_(opts);
+  }
+  if (ch.slack && !slackOk && ch.slackFallbackEmail && !emailOk && !triedEmail) {
+    emailOk = rvtoSendWeekBlockOfferEmail_(opts);
+  }
+
+  return rvtoOfferDeliverySucceeded_(slackOk, emailOk, ch);
+}
+
+/** Multi-day bundle. */
+function rvtoDeliverWeekVtoBundleOffer_(opts) {
+  var config     = opts.config;
+  var ch         = rvtoGetOfferChannelSettings_(config);
+  var slackOk    = false;
+  var emailOk    = false;
+  var triedEmail = false;
+
+  if (ch.slack) slackOk = rvtoSendOfferSlackBundle_(opts);
+  if (ch.email) {
+    triedEmail = true;
+    emailOk = rvtoSendWeekVtoBundleEmail_(opts);
+  }
+  if (ch.slack && !slackOk && ch.slackFallbackEmail && !emailOk && !triedEmail) {
+    emailOk = rvtoSendWeekVtoBundleEmail_(opts);
+  }
+
+  return rvtoOfferDeliverySucceeded_(slackOk, emailOk, ch);
+}
+
+/*************************************************************
+ * OFFER EMAIL — preview (v1.10.1)
+ *************************************************************/
+
+/**
+ * Reads VTO_OFFER_PREVIEW_EMAIL / VTO_OFFER_PREVIEW_MODE from Config.
+ * mode: OFF | BCC | COPY_ONLY (REDIRECT/PREVIEW_ONLY aliases map to COPY_ONLY).
+ */
+function rvtoGetOfferPreviewSettings_(config) {
+  var preview = String((config && config.VTO_OFFER_PREVIEW_EMAIL) || '').trim();
+  if (!preview) return { active: false, email: '', mode: 'OFF' };
+  var raw = String((config && config.VTO_OFFER_PREVIEW_MODE) || 'BCC').trim().toUpperCase();
+  var mode = 'BCC';
+  if (raw === 'OFF' || raw === 'FALSE' || raw === 'NONE') mode = 'OFF';
+  else if (raw === 'COPY_ONLY' || raw === 'REDIRECT' || raw === 'PREVIEW_ONLY' || raw === 'OPERATOR_ONLY') {
+    mode = 'COPY_ONLY';
+  }
+  if (mode === 'OFF') return { active: false, email: '', mode: 'OFF' };
+  return { active: true, email: preview, mode: mode };
+}
+
+/**
+ * Sends one Gmail: optional operator preview (BCC or COPY_ONLY).
+ * offerKind: INTRADAY | WEEK_BLOCK_WEEK | WEEK_BLOCK_BUNDLE (for banner/subject).
+ */
+function rvtoSendOfferGmailWithPreview_(opts) {
+  var cfg      = opts.config || {};
+  var pv       = rvtoGetOfferPreviewSettings_(cfg);
+  var fromName = opts.fromName || 'Scheduling Bot';
+  var repLc    = String(opts.repEmail || opts.primaryTo || '').trim().toLowerCase();
+  var to       = String(opts.primaryTo || '').trim();
+  var subject  = String(opts.subject || '');
+  var plain    = String(opts.plain != null ? opts.plain : '');
+  var html     = String(opts.html || '');
+  var kind     = String(opts.offerKind || 'VTO');
+
+  if (!pv.active) {
+    GmailApp.sendEmail(to, subject, plain, { name: fromName, htmlBody: html });
+    return;
+  }
+
+  var pvLc = String(pv.email).trim().toLowerCase();
+  if (pvLc === repLc) {
+    GmailApp.sendEmail(to, subject, plain, { name: fromName, htmlBody: html });
+    return;
+  }
+
+  if (pv.mode === 'COPY_ONLY') {
+    var banner = "<div style='background:#fff3cd;border:1px solid #e6b800;padding:12px 14px;margin:0 0 18px 0;font-size:13px;line-height:1.45;color:#333;'>" +
+      "<strong>[VTO offer preview — " + rvtoEscHtml_(kind) + "]</strong><br>" +
+      'This message was sent <em>only</em> to you (operator preview). The real consultant is <strong>' +
+      rvtoEscHtml_(opts.repEmail || to) + '</strong> and was <strong>not</strong> emailed in COPY_ONLY mode.<br>' +
+      'Accept / Decline links below still apply to <em>that person&rsquo;s</em> offer row in the spreadsheet.</div>';
+    var subj = '[VTO preview ' + kind + '] ' + subject + ' | rep: ' + (opts.repEmail || to);
+    GmailApp.sendEmail(pv.email, subj, rvtoHtmlToPlain_(html), {
+      name: fromName,
+      htmlBody: banner + html
+    });
+    return;
+  }
+
+  GmailApp.sendEmail(to, subject, plain, {
+    name: fromName,
+    htmlBody: html,
+    bcc: pv.email
+  });
+}
+
+/** Short audit fragment describing active preview mode. */
+function rvtoOfferPreviewAuditSuffix_(config) {
+  var pv = rvtoGetOfferPreviewSettings_(config);
+  if (!pv.active) return '';
+  if (pv.mode === 'COPY_ONLY') return ' | preview COPY_ONLY to ' + pv.email;
+  return ' | preview BCC ' + pv.email;
+}
+
+
 function rvtoSendOfferEmail_(opts) {
   const config   = opts.config;
   const tz       = config.TIMEZONE || 'America/Chicago';
@@ -2993,7 +4339,7 @@ function rvtoSendOfferEmail_(opts) {
   const html = [
     "<div style='font-family:Arial,sans-serif;font-size:14px;line-height:1.5;'>",
     "<p>Hi " + rvtoEscHtml_(opts.name || 'there') + ",</p>",
-    "<p>You have a voluntary time off opportunity available.Please note that this does not impact holiday pay.</p>",
+    "<p>You have a voluntary time off opportunity available.</p>",
     "<p><strong>Date:</strong> "  + rvtoEscHtml_(dateDisplay) + "<br>",
     "<strong>Time:</strong> "  + rvtoEscHtml_(timeDisplay) + "<br>",
     "<strong>Queue:</strong> " + rvtoEscHtml_(opts.queue)  + "</p>",
@@ -3005,12 +4351,93 @@ function rvtoSendOfferEmail_(opts) {
   ].join('');
 
   try {
-    GmailApp.sendEmail(opts.email, subject, rvtoHtmlToPlain_(html), { name: fromName, htmlBody: html });
-    rvtoAudit_('SEND_EMAIL', opts.offerId, 'Sent to ' + opts.email, 'OK');
+    rvtoSendOfferGmailWithPreview_({
+      config:     config,
+      repEmail:   opts.email,
+      offerKind:  'INTRADAY',
+      primaryTo:  opts.email,
+      subject:    subject,
+      plain:      rvtoHtmlToPlain_(html),
+      html:       html,
+      fromName:   fromName
+    });
+    rvtoAudit_('SEND_EMAIL', opts.offerId, 'Sent to ' + opts.email + rvtoOfferPreviewAuditSuffix_(config), 'OK');
     return true;
   } catch (err) {
     rvtoAudit_('SEND_EMAIL', opts.offerId, String(err), 'FAILED');
     return false;
+  }
+}
+
+/*************************************************************
+ * DESKTOP ALERTS — Shift Optimizer Web Push hub
+ *************************************************************/
+var RVTO_BID_ALERT_NOTIFY_URL = 'https://shift-optimizer-varsity-wfm.netlify.app/api/bid-alerts/notify';
+
+function rvtoOfferAlertDetail_(obj, action) {
+  var name = String(obj['Name'] || obj['Email'] || 'Rep').trim();
+  var tz = (rvtoGetConfig_().TIMEZONE || 'America/Chicago');
+  var date = (obj['Date'] instanceof Date)
+    ? Utilities.formatDate(obj['Date'], tz, 'yyyy-MM-dd')
+    : String(obj['Date'] || '').trim();
+  var start = (obj['Start'] instanceof Date)
+    ? Utilities.formatDate(obj['Start'], tz, 'HH:mm')
+    : String(obj['Start'] || '').trim();
+  var end = (obj['End'] instanceof Date)
+    ? Utilities.formatDate(obj['End'], tz, 'HH:mm')
+    : String(obj['End'] || '').trim();
+  var queue = String(obj['Queue'] || '').trim();
+  var verb = action === 'decline' ? 'declined' : (action === 'committed' ? 'committed' : 'accepted');
+  var detail = name + ' ' + verb;
+  if (date) detail += ': ' + date;
+  if (start && end) detail += ' ' + start + '-' + end;
+  if (queue) detail += ' (' + queue + ')';
+  return detail;
+}
+
+function rvtoOfferAlertNotify_(action, obj, offerId) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var config = rvtoGetConfig_();
+    var secret = (props.getProperty('BID_ALERT_NOTIFY_SECRET') || String(config.BID_ALERT_NOTIFY_SECRET || '')).trim();
+    if (!secret) {
+      rvtoAudit_('BID_ALERT_SKIP', offerId || '', 'BID_ALERT_NOTIFY_SECRET not set', 'WARN');
+      return;
+    }
+    var url = (props.getProperty('BID_ALERT_NOTIFY_URL') || RVTO_BID_ALERT_NOTIFY_URL).trim();
+    var kind = action === 'decline' ? 'declined' : 'accepted';
+    var offerDate = '';
+    if (obj['Date'] instanceof Date) {
+      offerDate = Utilities.formatDate(obj['Date'], Session.getScriptTimeZone() || 'America/Chicago', 'yyyy-MM-dd');
+    } else {
+      offerDate = String(obj['Date'] || '').trim().substring(0, 10);
+    }
+    var payload = {
+      source: 'vto',
+      kind: kind,
+      consultantName: String(obj['Name'] || obj['Email'] || 'Rep').trim(),
+      consultantEmail: String(obj['Email'] || '').trim() || null,
+      detail: rvtoOfferAlertDetail_(obj, action),
+      offerId: offerId,
+      offerDate: offerDate,
+      id: action === 'decline' ? ('vto_declined:' + offerId) : ('vto_committed:' + offerId),
+      secret: secret
+    };
+    var resp = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'X-Bid-Alert-Secret': secret },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    var code = resp.getResponseCode();
+    if (code < 200 || code >= 300) {
+      rvtoAudit_('BID_ALERT_FAIL', offerId || '', 'HTTP ' + code + ': ' + resp.getContentText().slice(0, 200), 'ERROR');
+    }
+  } catch (err) {
+    try {
+      rvtoAudit_('BID_ALERT_FAIL', offerId || '', String(err.message || err).slice(0, 200), 'ERROR');
+    } catch (auditErr) { /* ignore */ }
   }
 }
 
@@ -3039,7 +4466,7 @@ function doGet(e) {
 }
 
 function rvtoProcessResponse_(offerId, action, token) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   if (!sheet) return { ok: false, message: 'Offer system unavailable.' };
 
   const values = sheet.getDataRange().getValues();
@@ -3295,7 +4722,7 @@ function rvtoResolveVtoTypeId_(config) {
  * OFFER EXPIRY
  *************************************************************/
 function expireRvtoOffers_() {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   if (!sheet) return 0;
 
   const values = sheet.getDataRange().getValues();
@@ -3325,7 +4752,17 @@ function expireRvtoOffers_() {
       const idx_status = headers.indexOf('Status');
       const idx_notes  = headers.indexOf('Notes');
       if (idx_status !== -1) sheet.getRange(i + 1, idx_status + 1).setValue(RVTO_APP.OFFER_STATUSES.EXPIRED);
-      if (idx_notes  !== -1) sheet.getRange(i + 1, idx_notes  + 1).setValue('Expired after hold window.');
+      // v1.9.9: Append rather than overwrite so the WEEK_VTO tag, Days: list,
+      // and Blocks: schedule survive expiry. Cross-run dedup and any
+      // downstream tooling that reads expired rows keep working.
+      if (idx_notes !== -1) {
+        var existingNotes = String(obj['Notes'] || '').trim();
+        var expiryMsg     = 'Expired after hold window.';
+        var newNotes      = existingNotes
+          ? (existingNotes.indexOf(expiryMsg) !== -1 ? existingNotes : existingNotes + ' | ' + expiryMsg)
+          : expiryMsg;
+        sheet.getRange(i + 1, idx_notes + 1).setValue(newNotes);
+      }
       rvtoAudit_('EXPIRE_OFFER', String(obj['Offer ID'] || ''), 'Expired', 'OK');
       count++;
     }
@@ -3344,7 +4781,7 @@ function rvtoBuildContext_(config, rules) {
     timezone: config.TIMEZONE || 'America/Chicago'
   };
 
-  const noFlySheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.NO_FLY);
+  const noFlySheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.NO_FLY);
   ctx.noFlySet = new Set();
   if (noFlySheet) {
     const vals = noFlySheet.getDataRange().getValues();
@@ -3364,7 +4801,12 @@ function rvtoBuildContext_(config, rules) {
 
   ctx.rampRows = rvtoGetRampInclusionRows_(ctx.timezone);
   if (ctx.rampRows.length) {
-    rvtoAudit_('RAMP_INCLUSION', '', ctx.rampRows.length + ' active ramp row(s) — effective net boosted per enabled queue (intraday + week-block)', 'INFO');
+    var rampBoostOn = rvtoConfigBool_(config.RAMP_NET_BOOST_ENABLED, true);
+    rvtoAudit_('RAMP_INCLUSION', '', ctx.rampRows.length + ' active ramp row(s) — ' +
+      (rampBoostOn
+        ? 'effective net boosted per enabled queue (intraday + week-block)'
+        : 'RAMP_NET_BOOST_ENABLED=FALSE — ramp rows ignored for net staffing (raw Assembled net only)'),
+      'INFO');
   }
 
   ctx.pgcByNormalizedName = rvtoLoadPgcMap_(config);
@@ -3373,7 +4815,7 @@ function rvtoBuildContext_(config, rules) {
 }
 
 function rvtoGetAllOfferObjects_() {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   if (!sheet) return [];
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) return [];
@@ -3384,7 +4826,7 @@ function rvtoGetAllOfferObjects_() {
 }
 
 function rvtoGetShadowExclusionEmails_() {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.SHADOW_EXCLUSION);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.SHADOW_EXCLUSION);
   const out   = new Set();
   if (!sheet || sheet.getLastRow() <= 1) return out;
 
@@ -3414,7 +4856,7 @@ function rvtoGetShadowExclusionEmails_() {
  * - Weekdays: blank = Mon–Fri; or 7 chars 1111100 = Mon..Sun (1 = working).
  */
 function rvtoGetRampInclusionRows_(tz) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.RAMP_INCLUSION);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.RAMP_INCLUSION);
   if (!sheet || sheet.getLastRow() <= 1) return [];
   const values  = sheet.getDataRange().getValues();
   const headers = values[0];
@@ -3528,6 +4970,16 @@ function rvtoRampNetBoostPerQueue_(intervalStart, intervalEnd, ctx, numQueues) {
   return total / n;
 }
 
+/**
+ * Ramp share applied to interpreted net for surplus/deficit math. Zero when Config
+ * RAMP_NET_BOOST_ENABLED is FALSE (matches Staffing timeline without ramp adjustment).
+ */
+function rvtoEffectiveRampBoostForInterval_(intervalStart, intervalEnd, ctx) {
+  if (!rvtoConfigBool_(ctx && ctx.config && ctx.config.RAMP_NET_BOOST_ENABLED, true)) return 0;
+  var n = ctx && ctx.enabledQueues ? ctx.enabledQueues.length : 0;
+  return rvtoRampNetBoostPerQueue_(intervalStart, intervalEnd, ctx, n);
+}
+
 function rvtoPgcAuditTokenForPerson_(pgcMap, person) {
   if (!pgcMap) return 'no_row';
   var na = rvtoNormalizeName_(person.name);
@@ -3578,33 +5030,161 @@ function rvtoParsePgcValue_(raw) {
   return isFinite(n) ? n : null;
 }
 
+/**
+ * Config PGC_OFFER_CEILING: highest PGC that may still receive a VTO offer (inclusive).
+ * Same scale as the PGC sheet (e.g. 85 means only people at 85% or below). Null = off.
+ */
+function rvtoPgcOfferCeilingFromConfig_(config) {
+  if (!config) return null;
+  var raw = config.PGC_OFFER_CEILING;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  var n = Number(String(raw).trim().replace(/%/g, ''));
+  if (!isFinite(n) || n < 0) return null;
+  return n;
+}
+
+/**
+ * Ceiling filter: no PGC row in map → pass. Numeric PGC above ceiling → fail.
+ */
+function rvtoRepPassesPgcOfferCeiling_(personName, pgcMap, ceiling) {
+  if (ceiling === null || ceiling === undefined) return true;
+  var map = pgcMap || {};
+  var na = rvtoNormalizeName_(personName);
+  if (!Object.prototype.hasOwnProperty.call(map, na)) return true;
+  var v = map[na];
+  if (v === null || v === undefined) return true;
+  var p = Number(v);
+  if (!isFinite(p)) return true;
+  return p <= ceiling;
+}
+
+/**
+ * 1-based column indexes for the PGC sheet (Script Properties).
+ * Defaults: 1 = column A (name), 2 = column B (pGC). Legacy Looker export: 2 and 7.
+ */
+function rvtoPgcSheetColumnIndexes_() {
+  var props = PropertiesService.getScriptProperties();
+  var nameCol = parseInt(String(props.getProperty('PGC_NAME_COLUMN') || '1').trim(), 10);
+  var valCol = parseInt(String(props.getProperty('PGC_VALUE_COLUMN') || '2').trim(), 10);
+  if (!isFinite(nameCol) || nameCol < 1) nameCol = 1;
+  if (!isFinite(valCol) || valCol < 1) valCol = 2;
+  return {
+    name1:   nameCol,
+    value1:  valCol,
+    nameIdx: nameCol - 1,
+    valueIdx: valCol - 1
+  };
+}
+
+/** Skip header / label rows when scanning the name column. */
+function rvtoRowLooksLikePgcHeaderName_(raw) {
+  var t = String(raw || '').trim().toLowerCase();
+  if (!t) return true;
+  if (t === 'name') return true;
+  if (t === 'sales rep') return true;
+  return false;
+}
+
+/** Append PGC rows from a 2-D range (row 0 = header) into map using script column props. */
+function rvtoMergePgcRowsIntoMap_(values, cols, map) {
+  if (!map) return;
+  cols = cols || rvtoPgcSheetColumnIndexes_();
+  var ni = cols.nameIdx;
+  var vi = cols.valueIdx;
+  var needLen = Math.max(ni, vi) + 1;
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    if (!row || row.length < needLen) continue;
+    var name = String(row[ni] || '').trim();
+    if (rvtoRowLooksLikePgcHeaderName_(name)) continue;
+    var pgc = rvtoParsePgcValue_(row[vi]);
+    if (pgc === null) continue;
+    map[rvtoNormalizeName_(name)] = pgc;
+  }
+}
+
 function rvtoLoadPgcMap_(config) {
   var map = {};
-  var use = config && rvtoConfigBool_(config.USE_PGC_PRIORITY, true);
-  if (!use) return map;
+  var usePriority = config && rvtoConfigBool_(config.USE_PGC_PRIORITY, true);
+  var ceiling     = rvtoPgcOfferCeilingFromConfig_(config);
+  if (!usePriority && ceiling === null) return map;
 
   var props = PropertiesService.getScriptProperties();
-  var id = String(props.getProperty('PGC_SPREADSHEET_ID') || '').trim();
-  if (!id) return map;
+  var idProp = String(props.getProperty('PGC_SPREADSHEET_ID') || '').trim();
+  var useActiveFallback = !idProp;
+  var id = idProp;
+  if (!id) {
+    try {
+      id = rvtoGetSpreadsheetId_();
+    } catch (e0) {
+      if (ceiling !== null) {
+        rvtoAudit_('PGC_LOAD', '', 'PGC_OFFER_CEILING set but PGC cannot load — set Script Property PGC_SPREADSHEET_ID or run from the bound spreadsheet.', 'WARN');
+      }
+      return map;
+    }
+  }
 
   try {
     var ss = SpreadsheetApp.openById(id);
-    var sheetName = String(props.getProperty('PGC_SHEET_NAME') || '').trim();
-    var sh = sheetName ? ss.getSheetByName(sheetName) : ss.getSheets()[0];
+    var activeId = '';
+    try { activeId = rvtoGetSpreadsheetId_(); } catch (eAct) { /* headless */ }
+
+    var sheetNameProp = String(props.getProperty('PGC_SHEET_NAME') || '').trim();
+    var sh = null;
+    if (sheetNameProp) {
+      sh = ss.getSheetByName(sheetNameProp);
+    } else if (id === activeId) {
+      sh = ss.getSheetByName('PGC');
+    }
+    if (!sh && ss.getSheets().length) {
+      sh = ss.getSheets()[0];
+    }
     if (!sh) {
-      rvtoAudit_('PGC_LOAD', '', 'PGC sheet not found: ' + (sheetName || '(first tab)'), 'WARN');
+      rvtoAudit_('PGC_LOAD', '', 'PGC sheet not found: ' + (sheetNameProp || (id === activeId ? 'PGC (default) or first tab' : '(first tab)')), 'WARN');
       return map;
     }
 
+    var origSh = sh;
     var values = sh.getDataRange().getValues();
-    for (var r = 1; r < values.length; r++) {
-      var name = String(values[r][1] || '').trim();
-      if (!name || name.toLowerCase() === 'name') continue;
-      var pgc = rvtoParsePgcValue_(values[r][6]);
-      if (pgc === null) continue;
-      map[rvtoNormalizeName_(name)] = pgc;
+    var cols = rvtoPgcSheetColumnIndexes_();
+    rvtoMergePgcRowsIntoMap_(values, cols, map);
+
+    var shPgcAlt = ss.getSheetByName('PGC');
+    if (Object.keys(map).length === 0 && shPgcAlt && shPgcAlt.getSheetId() !== sh.getSheetId()) {
+      sh = shPgcAlt;
+      values = sh.getDataRange().getValues();
+      rvtoMergePgcRowsIntoMap_(values, cols, map);
     }
-    rvtoAudit_('PGC_LOAD', '', 'Loaded PGC for ' + Object.keys(map).length + ' name(s)', 'OK');
+
+    var mergedFromActiveBound = false;
+    if (Object.keys(map).length === 0 && activeId && id !== activeId) {
+      try {
+        var ssBound = rvtoGetSpreadsheet_();
+        if (ssBound && ssBound.getId() === activeId) {
+          var shBoundPgc = ssBound.getSheetByName('PGC');
+          if (shBoundPgc) {
+            rvtoMergePgcRowsIntoMap_(shBoundPgc.getDataRange().getValues(), cols, map);
+            if (Object.keys(map).length > 0) mergedFromActiveBound = true;
+          }
+        }
+      } catch (eBound) { /* headless or no access */ }
+    }
+
+    var n = Object.keys(map).length;
+    var srcTag = mergedFromActiveBound ? 'active_workbook_merged' : (useActiveFallback ? 'active_workbook' : 'external_id');
+    var tabDesc = sh.getName();
+    if (mergedFromActiveBound) {
+      tabDesc = 'PGC (bound workbook; external had 0 usable rows)';
+    } else if (n > 0 && origSh.getSheetId() !== sh.getSheetId()) {
+      tabDesc = sh.getName() + ' (fallback; "' + origSh.getName() + '" had 0 usable rows)';
+    }
+    var baseMsg = 'Loaded PGC for ' + n + ' name(s) | nameCol=' + cols.name1 + ' valueCol=' + cols.value1 +
+      ' | tab=' + tabDesc + ' | ' + srcTag;
+    if (n === 0 && (ceiling !== null || usePriority)) {
+      rvtoAudit_('PGC_LOAD', '', baseMsg + ' — CEILING/SORT INACTIVE until rows load: fix PGC_SHEET_NAME / PGC_SPREADSHEET_ID, add a "PGC" tab on the external file, PGC_NAME_COLUMN/PGC_VALUE_COLUMN, or ensure bound workbook "PGC" has values (IMPORTRANGE may be empty for the server until authorized).', 'WARN');
+    } else {
+      rvtoAudit_('PGC_LOAD', '', baseMsg, 'OK');
+    }
   } catch (err) {
     rvtoAudit_('PGC_LOAD', '', String(err), 'WARN');
   }
@@ -3631,7 +5211,7 @@ function rvtoSortEligibleByPgc_(eligible, pgcMap) {
 }
 
 function rvtoBuildOfferHistory_(now, hoursBack) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   if (!sheet) return {};
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) return {};
@@ -3640,6 +5220,23 @@ function rvtoBuildOfferHistory_(now, hoursBack) {
   const cutoff24h = new Date(now.getTime() - (hoursBack * 60 * 60 * 1000));
   const todayKey  = Utilities.formatDate(now, 'America/Chicago', 'yyyy-MM-dd');
   const out       = {};
+
+  // v1.10.0: One bundle email creates N sheet rows sharing BUNDLE_ID= in Notes.
+  // Count each bundle only once toward daily / 24h caps (by Sent At calendar day).
+  var bundleCountedToday = {};
+  var bundleCounted24h   = {};
+
+  function bundleMarkCounted(store, email, bid) {
+    if (!store[email]) store[email] = {};
+    if (store[email][bid]) return false;
+    store[email][bid] = true;
+    return true;
+  }
+
+  function extractBundleId_(notesStr) {
+    var m = String(notesStr || '').match(/BUNDLE_ID=([^\\s|]+)/);
+    return m ? m[1].trim() : '';
+  }
 
   // v1.7.8: Rows are in sheet order (oldest first). A COMMITTED row resets the
   // cap counters for that rep — they become immediately re-eligible after a
@@ -3653,9 +5250,11 @@ function rvtoBuildOfferHistory_(now, hoursBack) {
 
     if (status === RVTO_APP.OFFER_STATUSES.SEND_FAILED || status === '') return;
 
-    // Cap-exempt: week-block offers are skipped so they don't block normal VTO
     const notes = String(obj['Notes'] || '');
-    if (notes.indexOf('WEEK_VTO') !== -1) return;
+    const bundleId = extractBundleId_(notes);
+
+    // Cap-exempt: legacy whole-range week-block rows (no bundle id)
+    if (notes.indexOf('WEEK_VTO') !== -1 && !bundleId) return;
 
     // v1.7.8: A COMMITTED row resets the cap — rep is hot again after acceptance.
     if (status === RVTO_APP.OFFER_STATUSES.COMMITTED) {
@@ -3675,14 +5274,40 @@ function rvtoBuildOfferHistory_(now, hoursBack) {
 
     if (!out[email]) out[email] = { sentToday: 0, sentLast24h: 0, lastSentAt: null };
 
-    // v1.8.0: A DECLINED row pins the counter at cap maximum so it cannot be
-    // overridden by a subsequent COMMITTED reset in the same sheet scan.
-    // This guarantees a hard 24h freeze after any decline regardless of
-    // what other offer rows exist for that rep.
+    // v1.8.0: A DECLINED row pins the counter at cap maximum — except v1.10.0
+    // bundle per-day declines should not freeze all other channels for 24h.
     if (status === RVTO_APP.OFFER_STATUSES.DECLINED) {
+      if (bundleId) {
+        return;
+      }
       out[email].sentToday   = 999;
       out[email].sentLast24h = 999;
       out[email].lastSentAt  = sentAt || out[email].lastSentAt;
+      return;
+    }
+
+    // v1.10.0: Bundle campaign rows — one email = one cap unit (by send date).
+    if (bundleId) {
+      var sendDayKey = (sentAt && !isNaN(sentAt.getTime()))
+        ? Utilities.formatDate(sentAt, 'America/Chicago', 'yyyy-MM-dd')
+        : todayKey;
+      if (sendDayKey === todayKey) {
+        if (bundleMarkCounted(bundleCountedToday, email, bundleId)) {
+          out[email].sentToday++;
+        }
+      }
+      if (sentAt && !isNaN(sentAt.getTime()) && sentAt >= cutoff24h) {
+        if (bundleMarkCounted(bundleCounted24h, email, bundleId)) {
+          out[email].sentLast24h++;
+          if (!out[email].lastSentAt || sentAt > out[email].lastSentAt) {
+            out[email].lastSentAt = sentAt;
+          }
+        }
+      } else if (status === RVTO_APP.OFFER_STATUSES.PENDING_SEND && sendDayKey === todayKey) {
+        if (bundleMarkCounted(bundleCounted24h, email, bundleId)) {
+          out[email].sentLast24h++;
+        }
+      }
       return;
     }
 
@@ -3706,7 +5331,7 @@ function rvtoBuildOfferHistory_(now, hoursBack) {
  * CONFIG / RULES READER
  *************************************************************/
 function rvtoGetConfig_() {
-  const sheet  = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.CONFIG);
+  const sheet  = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.CONFIG);
   const values = sheet ? sheet.getDataRange().getValues() : [];
   const out    = {};
   values.slice(1).forEach(function(row) {
@@ -3900,10 +5525,69 @@ function rvtoBuildUrl_(base, params) {
 }
 
 /*************************************************************
+ * WORKBOOK ACCESS (v1.11.2 — reliable in web app / doGet)
+ *************************************************************/
+
+/** Script Property RVTO_SPREADSHEET_ID, else bound workbook when run from the sheet. */
+function rvtoGetSpreadsheetId_() {
+  var id = (PropertiesService.getScriptProperties().getProperty('RVTO_SPREADSHEET_ID') || '').trim();
+  if (id) return id;
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) return ss.getId();
+  } catch (e) { /* headless */ }
+  try {
+    var active = SpreadsheetApp.getActive();
+    if (active) return active.getId();
+  } catch (e2) { /* headless */ }
+  return '';
+}
+
+/**
+ * Opens the Targeted VTO Bot workbook. Web apps must use openById — getActive() often
+ * returns null or the wrong file in doGet, which caused "Offer not found" despite valid rows.
+ */
+function rvtoGetSpreadsheet_() {
+  var id = rvtoGetSpreadsheetId_();
+  if (!id) {
+    throw new Error(
+      'Targeted VTO Bot: workbook not configured. Set Script Property RVTO_SPREADSHEET_ID ' +
+      'to this spreadsheet\'s ID, or run Setup Workbook once from Extensions > Apps Script ' +
+      'while this Targeted VTO Bot file is open.'
+    );
+  }
+  try {
+    return SpreadsheetApp.openById(id);
+  } catch (err) {
+    throw new Error('Targeted VTO Bot: cannot open spreadsheet RVTO_SPREADSHEET_ID=' + id + ': ' + err);
+  }
+}
+
+/** Run from Setup Workbook: persists this file's ID for headless web-app / trigger runs. */
+function rvtoEnsureSpreadsheetIdProperty_() {
+  var props = PropertiesService.getScriptProperties();
+  var existing = (props.getProperty('RVTO_SPREADSHEET_ID') || '').trim();
+  if (existing) return existing;
+  var id = '';
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) id = ss.getId();
+  } catch (e) { /* headless */ }
+  if (!id) {
+    try {
+      var active = SpreadsheetApp.getActive();
+      if (active) id = active.getId();
+    } catch (e2) { /* headless */ }
+  }
+  if (id) props.setProperty('RVTO_SPREADSHEET_ID', id);
+  return id;
+}
+
+/*************************************************************
  * OFFER SHEET HELPERS
  *************************************************************/
 function rvtoAppendOfferRow_(o) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   if (!sheet) return;
   sheet.appendRow([
     o.offerId, o.deficitId,
@@ -3916,17 +5600,80 @@ function rvtoAppendOfferRow_(o) {
 }
 
 function rvtoUpdateOfferField_(offerId, columnName, value) {
-  const sheet  = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  const sheet  = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) return;
   const headers = values[0];
   const col     = headers.indexOf(columnName);
   if (col === -1) return;
+  const statusCol = headers.indexOf('Status');
   for (var i = 1; i < values.length; i++) {
     if (String(values[i][headers.indexOf('Offer ID')] || '').trim() === offerId) {
+      var prevStatus = statusCol >= 0
+        ? String(values[i][statusCol] || '').trim().toUpperCase()
+        : '';
       sheet.getRange(i + 1, col + 1).setValue(value);
+      if (
+        columnName === 'Status' &&
+        String(value || '').trim().toUpperCase() === RVTO_APP.OFFER_STATUSES.COMMITTED &&
+        prevStatus !== RVTO_APP.OFFER_STATUSES.COMMITTED
+      ) {
+        var obj = rvtoRowToObj_(headers, values[i]);
+        obj['Status'] = value;
+        rvtoOfferAlertNotify_('committed', obj, offerId);
+      } else if (
+        columnName === 'Status' &&
+        String(value || '').trim().toUpperCase() === RVTO_APP.OFFER_STATUSES.DECLINED &&
+        prevStatus !== RVTO_APP.OFFER_STATUSES.DECLINED
+      ) {
+        var objDecl = rvtoRowToObj_(headers, values[i]);
+        objDecl['Status'] = value;
+        rvtoOfferAlertNotify_('decline', objDecl, offerId);
+      }
       return;
     }
+  }
+}
+
+/** Install onEdit trigger for Offers Status → COMMITTED / DECLINED desktop alerts. */
+function rvtoInstallOfferAlertTrigger_() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'rvtoOnOffersEdit_') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('rvtoOnOffersEdit_')
+    .forSpreadsheet(rvtoGetSpreadsheet_())
+    .onEdit()
+    .create();
+}
+
+/** Fires desktop alert when Offers Status column is set to COMMITTED or DECLINED. */
+function rvtoOnOffersEdit_(e) {
+  try {
+    if (!e || !e.range) return;
+    var sheet = e.range.getSheet();
+    if (sheet.getName() !== RVTO_APP.SHEETS.OFFERS) return;
+    if (e.range.getColumn() !== 14) return;
+    var next = String(e.value || '').trim().toUpperCase();
+    var prev = String(e.oldValue || '').trim().toUpperCase();
+    if (next === prev) return;
+    var action = null;
+    if (next === RVTO_APP.OFFER_STATUSES.COMMITTED && prev !== RVTO_APP.OFFER_STATUSES.COMMITTED) {
+      action = 'committed';
+    } else if (next === RVTO_APP.OFFER_STATUSES.DECLINED && prev !== RVTO_APP.OFFER_STATUSES.DECLINED) {
+      action = 'decline';
+    }
+    if (!action) return;
+    var row = e.range.getRow();
+    if (row <= 1) return;
+    var lastCol = sheet.getLastColumn();
+    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    var rowValues = sheet.getRange(row, 1, row, lastCol).getValues()[0];
+    var obj = rvtoRowToObj_(headers, rowValues);
+    var offerId = String(obj['Offer ID'] || '').trim();
+    if (!offerId) return;
+    rvtoOfferAlertNotify_(action, obj, offerId);
+  } catch (err) {
+    /* never disrupt sheet edits */
   }
 }
 
@@ -3940,7 +5687,7 @@ function rvtoUpdateOfferField_(offerId, columnName, value) {
  * Returns {} if tab is missing or empty.
  */
 function rvtoGetManagerAliasMap_() {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.MANAGER_ALIASES);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.MANAGER_ALIASES);
   if (!sheet || sheet.getLastRow() <= 1) return {};
   const values = sheet.getDataRange().getValues();
   const out    = {};
@@ -3957,7 +5704,7 @@ function rvtoGetManagerAliasMap_() {
  * Returns the manager name string or '' if not found.
  */
 function rvtoGetManagerForRep_(repEmail) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.ROSTER);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.ROSTER);
   if (!sheet) return '';
   const values  = sheet.getDataRange().getValues();
   if (values.length <= 1) return '';
@@ -4008,11 +5755,15 @@ function rvtoGetSlackUserId_(alias) {
 }
 
 /**
- * Sends a Slack DM to a user by their Slack user ID.
+ * Sends a Slack DM to a user by their Slack user ID. Returns true on success.
  */
-function rvtoSendSlackDm_(userId, message) {
+function rvtoSendSlackDmReturningOk_(userId, message) {
   try {
     const token   = (PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN') || '').trim();
+    if (!token) {
+      rvtoAudit_('SLACK_DM', '', 'SLACK_BOT_TOKEN not set in Script Properties', 'WARN');
+      return false;
+    }
     const openRes = UrlFetchApp.fetch('https://slack.com/api/conversations.open', {
       method: 'post',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -4022,7 +5773,7 @@ function rvtoSendSlackDm_(userId, message) {
     const openData = JSON.parse(openRes.getContentText());
     if (!openData.ok) {
       rvtoAudit_('SLACK_DM', '', 'Failed to open DM channel: ' + openData.error, 'WARN');
-      return;
+      return false;
     }
     const msgRes = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
       method: 'post',
@@ -4031,10 +5782,20 @@ function rvtoSendSlackDm_(userId, message) {
       muteHttpExceptions: true
     });
     const msgData = JSON.parse(msgRes.getContentText());
-    if (!msgData.ok) rvtoAudit_('SLACK_DM', '', 'Failed to send DM: ' + msgData.error, 'WARN');
+    if (!msgData.ok) {
+      rvtoAudit_('SLACK_DM', '', 'Failed to send DM: ' + msgData.error, 'WARN');
+      return false;
+    }
+    return true;
   } catch (err) {
     rvtoAudit_('SLACK_DM', '', 'DM send exception: ' + String(err), 'WARN');
+    return false;
   }
+}
+
+/** Manager commit notify — void wrapper. */
+function rvtoSendSlackDm_(userId, message) {
+  rvtoSendSlackDmReturningOk_(userId, message);
 }
 
 /**
@@ -4080,7 +5841,7 @@ function rvtoNotifyManagerOnCommit_(repEmail, repName, message, config) {
  * AUDIT
  *************************************************************/
 function rvtoAudit_(event, refId, details, result) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.AUDIT);
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.AUDIT);
   if (!sheet) return;
   sheet.appendRow([new Date(), event, refId, details, result]);
 }
@@ -4089,7 +5850,7 @@ function rvtoAudit_(event, refId, details, result) {
  * SETUP HELPERS
  *************************************************************/
 function rvtoGetOrCreate_(name) {
-  const ss  = SpreadsheetApp.getActive();
+  const ss  = rvtoGetSpreadsheet_();
   var sheet = ss.getSheetByName(name);
   if (!sheet) sheet = ss.insertSheet(name);
   return sheet;
@@ -4101,7 +5862,7 @@ function rvtoGetOrCreate_(name) {
  * names not already present, never overwrites existing aliases.
  */
 function rvtoPopulateManagerAliasesFromRoster_(aliasSheet) {
-  const rosterSheet = SpreadsheetApp.getActive().getSheetByName(RVTO_APP.SHEETS.ROSTER);
+  const rosterSheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.ROSTER);
   if (!rosterSheet || rosterSheet.getLastRow() <= 1) return;
 
   const rosterValues  = rosterSheet.getDataRange().getValues();
@@ -4164,7 +5925,7 @@ function rvtoClearSheetBody_(sheet) {
 }
 
 function rvtoFormatSheets_() {
-  const ss = SpreadsheetApp.getActive();
+  const ss = rvtoGetSpreadsheet_();
   [RVTO_APP.SHEETS.CONFIG, RVTO_APP.SHEETS.ROSTER, RVTO_APP.SHEETS.NO_FLY,
    RVTO_APP.SHEETS.SHADOW_EXCLUSION, RVTO_APP.SHEETS.RAMP_INCLUSION, RVTO_APP.SHEETS.MANAGER_ALIASES,
    RVTO_APP.SHEETS.OFFERS, RVTO_APP.SHEETS.AUDIT, RVTO_APP.SHEETS.CHANGELOG

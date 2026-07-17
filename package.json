@@ -18,8 +18,18 @@
     "bootstrap-env": "node scripts/bootstrap-local-env.js",
     "assembled:list-schedules": "node scripts/assembled-list-schedules.js",
     "assembled:inspect-forecast": "node scripts/assembled-inspect-forecast.js",
+    "deploy:meeting-governor": "NODE_PATH=../cs-adherence-dashboard/node_modules node scripts/deploy-meeting-governor.js",
     "dev": "npx --yes netlify dev",
     "dev:functions": "NODE_OPTIONS=--max-old-space-size=8192 npx --yes netlify functions:serve --offline -f netlify/functions -p 8889",
     "dev:proxy": "node scripts/dev-dashboard-proxy.js"
-  }
+  },
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "devDependencies": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
 }

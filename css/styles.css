@@ -154,22 +154,11 @@ body {
   color: rgba(247, 244, 239, 0.7);
 }
 
-.header-theme-toggle {
+.toolbar-theme-toggle {
   flex-shrink: 0;
-  font-family: var(--font-sans);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 7px 12px;
-  border-radius: var(--radius);
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  background: rgba(255, 255, 255, 0.07);
-  color: rgba(247, 244, 239, 0.92);
-  cursor: pointer;
-}
-.header-theme-toggle:hover {
-  background: rgba(255, 255, 255, 0.14);
+  font-size: 11px;
+  padding: 5px 12px;
+  letter-spacing: 0.06em;
 }
 
 .toolbar {
@@ -458,7 +447,7 @@ body {
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--navy);
+  color: var(--text-pri);
   margin-bottom: 6px;
 }
 .idle-split-kpi {
@@ -706,7 +695,7 @@ body {
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--navy);
+  color: var(--text-pri);
 }
 .ot-fill-main-col .ot-fill-today-subhead {
   text-align: left;
@@ -722,7 +711,7 @@ body {
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--navy);
+  color: var(--text-pri);
 }
 .ot-fill-warn-omit {
   font-size: 10px;
@@ -855,7 +844,7 @@ body {
   font-family: var(--font-mono);
   font-size: 28px;
   font-weight: 600;
-  color: var(--navy);
+  color: var(--text-pri);
 }
 .panel-sub {
   font-size: 12px;
@@ -940,7 +929,7 @@ a.digest-link {
 }
 .adh-ooa-name {
   font-weight: 700;
-  color: var(--navy);
+  color: var(--text-pri);
 }
 .adh-ooa-state {
   color: var(--text-sec);
@@ -994,7 +983,7 @@ a.digest-link {
 }
 .adh-intraday-table .adh-intraday-agent {
   font-weight: 700;
-  color: var(--navy);
+  color: var(--text-pri);
 }
 .adh-intraday-table .adh-intraday-mgr {
   color: var(--text-sec);
@@ -1259,7 +1248,7 @@ a.digest-link {
 .rollup-total-value {
   font-family: var(--font-mono);
   font-size: 22px;
-  color: var(--navy);
+  color: var(--text-pri);
 }
 .rollup-total-subline {
   margin-top: 6px;
@@ -1273,7 +1262,7 @@ a.digest-link {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.01em;
-  color: var(--text-main);
+  color: var(--text-pri);
 }
 .rollup-breakdown {
   margin-top: 8px;
@@ -1394,7 +1383,7 @@ a.digest-link {
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--navy);
+  color: var(--text-pri);
 }
 .vto-period-meta {
   display: block;
@@ -1644,7 +1633,7 @@ table.rollup-table tfoot tr.rollup-sum-row td {
 .stl-kpi strong {
   font-size: clamp(20px, 3.5vw, 28px);
   font-weight: 700;
-  color: var(--navy);
+  color: var(--text-pri);
 }
 .stl-meta-line {
   margin: 0 0 4px;

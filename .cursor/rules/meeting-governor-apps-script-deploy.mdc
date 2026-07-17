@@ -1,0 +1,22 @@
+---
+description: Always deploy meeting-governor.gs to Apps Script after edits
+globs: apps-script/meeting-governor.gs
+alwaysApply: false
+---
+
+# Meeting Governor — Apps Script deploy
+
+After **any** change to `apps-script/meeting-governor.gs`:
+
+1. Bump `MG.VERSION` and the header/changelog when the change is user-facing.
+2. **Deploy to Apps Script** — do not leave edits local-only:
+   ```bash
+   cd /Users/robert.sorrell/dev/nerdy/Staffing-Health-Dashboard
+   NODE_PATH=../cs-adherence-dashboard/node_modules node scripts/deploy-meeting-governor.js
+   ```
+3. Confirm deploy succeeded (script logs `Saved Code.gs — vX.Y.Z is live`).
+4. Only add `--run-now` when the user asks to rerun pending Requests rows.
+
+**Project IDs:** Spreadsheet `1HsE_GG26stfnkPgg9C964Y7M9r3ZDuzRN_D-AkzcQOo` · Apps Script `1_-YQGfTzW9r_cd0MfNRHZO5DcS84PGMiAfbWlBWjfo4eSfeuTGYJS2GQ`
+
+Uses Playwright + Chrome profile at `../cs-adherence-dashboard/.playwright-google-profile` (must be logged into Google).

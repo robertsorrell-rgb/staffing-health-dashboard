@@ -1,26 +1,13 @@
 import { NavLink, Outlet } from "react-router-dom";
-import {
-  Calendar,
-  Gauge,
-  LayoutDashboard,
-  LogOut,
-  Radio,
-  Sun,
-  Moon,
-  Users,
-  ClipboardList,
-} from "lucide-react";
+import { CalendarPlus, ClipboardList, LayoutDashboard, LogOut, Moon, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { UserProfile } from "@/lib/api-client";
 
 const nav = [
   { to: "/", label: "Team", icon: LayoutDashboard, end: true },
-  { to: "/schedule", label: "Schedule", icon: Calendar },
-  { to: "/meetings", label: "Meetings", icon: Users },
-  { to: "/vto-ot", label: "VTO / OT", icon: Radio },
-  { to: "/adherence", label: "Adherence", icon: Gauge },
-  { to: "/queue", label: "Queue", icon: ClipboardList },
+  { to: "/changes", label: "Request", icon: CalendarPlus },
+  { to: "/submissions", label: "Submissions", icon: ClipboardList },
 ];
 
 interface AppShellProps {
@@ -40,7 +27,7 @@ export function AppShell({ profile, theme, onToggleTheme, onSignOut }: AppShellP
           </div>
           <div>
             <p className="text-sm font-semibold tracking-tight">Pitstop</p>
-            <p className="hidden text-xs text-muted-foreground md:block">WFM cockpit</p>
+            <p className="hidden text-xs text-muted-foreground md:block">Schedule changes</p>
           </div>
         </div>
 
@@ -93,9 +80,8 @@ export function AppShell({ profile, theme, onToggleTheme, onSignOut }: AppShellP
         </main>
       </div>
 
-      {/* Mobile bottom nav */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 flex justify-around border-t border-border bg-card/95 py-2 backdrop-blur md:hidden">
-        {nav.slice(0, 5).map(({ to, label, icon: Icon, end }) => (
+        {nav.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}

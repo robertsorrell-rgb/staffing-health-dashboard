@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getSession } from "./auth";
 import { mockScheduleChange } from "./dev-preview-api";
 import { isDevPreview } from "./dev-preview";
+import type { ScheduleChangeType } from "@/types/change-request";
 
 async function authHeaders(): Promise<HeadersInit> {
   const session = await getSession();
@@ -69,20 +70,26 @@ const scheduleChangeResponseSchema = z.object({
       }),
     )
     .optional(),
-  assembled: z
-    .object({ ok: z.boolean(), mock: z.boolean() })
+  commit: z
+    .object({
+      ok: z.boolean(),
+      mock: z.boolean(),
+      detail: z.record(z.unknown()).optional(),
+    })
     .nullable()
     .optional(),
+  autoCommit: z.boolean().optional(),
+  sheetLogicSource: z.string().optional(),
   mockEngine: z.boolean().optional(),
 });
 
 export type ScheduleChangeResponse = z.infer<typeof scheduleChangeResponseSchema>;
 
 export interface ScheduleChangePayload {
-  repId: string;
-  repName: string;
+  consultantId: string;
+  consultantName: string;
   activityId: string;
-  changeType: "move_shift_start" | "move_shift_end" | "change_activity_type" | "delete_activity" | "add_activity";
+  changeType: ScheduleChangeType;
   newStart?: string;
   newEnd?: string;
   windowStart: string;
@@ -92,7 +99,7 @@ export interface ScheduleChangePayload {
 }
 
 export async function submitScheduleChange(
-  payload: ScheduleChangePayload,
+  payload: ScheduleChangePayload & Record<string, unknown>,
 ): Promise<ScheduleChangeResponse> {
   if (isDevPreview()) return mockScheduleChange(payload);
   return apiFetch(
@@ -100,4 +107,38 @@ export async function submitScheduleChange(
     { method: "POST", body: JSON.stringify(payload) },
     scheduleChangeResponseSchema,
   );
+}
+
+const approvalsSchema = z.object({
+  requests: z.array(
+    z.object({
+      id: z.string(),
+      change_type: z.string(),
+      status: z.string(),
+      capacity_decision: z.string().nullable(),
+      capacity_reasoning: z.string().nullable(),
+      rep_name: z.string().nullable(),
+      created_at: z.string(),
+      updated_at: z.string().optional(),
+    }),
+  ),
+});
+
+export async function fetchApprovals() {
+  if (isDevPreview()) {
+    const { mockFetchApprovals } = await import("./dev-preview-api");
+    return mockFetchApprovals();
+  }
+  return apiFetch("/api/approvals", { method: "GET" }, approvalsSchema);
+}
+
+export async function wfmDecide(changeRequestId: string, decision: "approve" | "deny") {
+  if (isDevPreview()) {
+    const { mockWfmApprove } = await import("./dev-preview-api");
+    return mockWfmApprove(changeRequestId, decision);
+  }
+  return apiFetch("/api/wfm-approve", {
+    method: "POST",
+    body: JSON.stringify({ changeRequestId, decision }),
+  });
 }

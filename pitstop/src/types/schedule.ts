@@ -15,13 +15,15 @@ export interface ScheduleBlock {
   durationMinutes: number;
 }
 
-export interface TeamRep {
+export interface TeamConsultant {
   id: string;
   name: string;
   role: string;
-  adherence: "in" | "out" | "unknown";
   blocks: ScheduleBlock[];
 }
+
+/** @deprecated use TeamConsultant */
+export type TeamRep = TeamConsultant;
 
 /** Operating window for timeline (America/Chicago) */
 export const TIMELINE_DAY_START_HOUR = 8;

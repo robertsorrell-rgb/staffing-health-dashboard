@@ -1,0 +1,10 @@
+---
+description: Do not push to GitHub unless the user explicitly asks to push in this chat
+alwaysApply: true
+---
+
+# Manual GitHub pushes only
+
+- Never run `git push`, `git push --force`, or create/update GitHub PRs that imply an immediate production deploy **unless the user clearly asks to push** (e.g. “push to GitHub”, “deploy”, “ship this”, “run git push”).
+- Local commits, branches, and `git status` / `git diff` are fine without asking.
+- Netlify production follows GitHub; keeping pushes explicit protects viewers (e.g. Kevin) from seeing half-finished work.

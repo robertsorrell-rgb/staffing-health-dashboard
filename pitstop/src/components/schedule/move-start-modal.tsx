@@ -10,10 +10,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { minutesToClockLabel } from "@/lib/schedule-time";
-import type { ScheduleBlock, TeamRep } from "@/types/schedule";
+import type { ScheduleBlock, TeamConsultant } from "@/types/schedule";
 
 export interface MoveStartContext {
-  rep: TeamRep;
+  consultant: TeamConsultant;
   block: ScheduleBlock;
 }
 
@@ -38,16 +38,16 @@ export function MoveStartModal({
 
   if (!context) return null;
 
-  const { rep, block } = context;
+  const { consultant, block } = context;
   const newStart = block.startMinutes + delta;
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Move shift start</DialogTitle>
+          <DialogTitle>Move block start</DialogTitle>
           <DialogDescription>
-            {rep.name} · {block.label} — currently starts at{" "}
+            {consultant.name} · {block.label} — currently starts at{" "}
             {minutesToClockLabel(block.startMinutes)}
           </DialogDescription>
         </DialogHeader>

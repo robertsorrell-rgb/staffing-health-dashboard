@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
 import { AlternativesPanel } from "@/components/approvals/alternatives-panel";
+import { ConsultantTimelineRow } from "@/components/schedule/rep-timeline-row";
 import { MoveStartModal, type MoveStartContext } from "@/components/schedule/move-start-modal";
-import { RepTimelineRow } from "@/components/schedule/rep-timeline-row";
 import { TimelineAxis } from "@/components/schedule/timeline-axis";
 import { SuccessBurst } from "@/components/shared/success-burst";
 import { submitScheduleChange, type ScheduleChangeResponse } from "@/lib/api-client";
@@ -30,18 +31,17 @@ export function DashboardPage() {
   }, []);
 
   const handleBlockClick = useCallback(
-    (repId: string, blockId: string) => {
-      const rep = team.find((r) => r.id === repId);
-      const block = rep?.blocks.find((b) => b.id === blockId);
-      if (!rep || !block) return;
-      // Vertical slice: first phone block → move start
+    (consultantId: string, blockId: string) => {
+      const consultant = team.find((c) => c.id === consultantId);
+      const block = consultant?.blocks.find((b) => b.id === blockId);
+      if (!consultant || !block) return;
       if (block.type === "phone") {
         setDeniedResult(null);
-        setModalContext({ rep, block });
+        setModalContext({ consultant, block });
       } else {
         toast({
           title: "Coming soon",
-          description: `Editing "${block.label}" blocks is next on the roadmap.`,
+          description: `One-off edits for "${block.label}" blocks are next.`,
           variant: "review",
         });
       }
@@ -51,13 +51,13 @@ export function DashboardPage() {
 
   const mutation = useMutation({
     mutationFn: async ({
-      repId,
-      repName,
+      consultantId,
+      consultantName,
       block,
       deltaMinutes,
     }: {
-      repId: string;
-      repName: string;
+      consultantId: string;
+      consultantName: string;
       block: ScheduleBlock;
       deltaMinutes: number;
     }) => {
@@ -69,10 +69,10 @@ export function DashboardPage() {
       const { windowStart: newStart } = blockToIsoWindow(newStartMinutes, 0);
 
       return submitScheduleChange({
-        repId,
-        repName,
+        consultantId,
+        consultantName,
         activityId: block.id,
-        changeType: "move_shift_start",
+        changeType: "move_block_start",
         newStart,
         windowStart,
         windowEnd,
@@ -80,42 +80,29 @@ export function DashboardPage() {
         staffingDeltaFte: deltaMinutes > 0 ? 0.1 : -0.1,
       });
     },
-    onMutate: async ({ repId, block, deltaMinutes }) => {
+    onMutate: async ({ consultantId, block, deltaMinutes }) => {
       setModalContext(null);
-      moveBlockStart(repId, block.id, deltaMinutes);
+      moveBlockStart(consultantId, block.id, deltaMinutes);
       setHighlightedBlockId(block.id);
-      return { repId, blockId: block.id };
     },
-    onSuccess: (data, _vars, _ctx) => {
+    onSuccess: (data, vars) => {
       setHighlightedBlockId(undefined);
       if (data.decision === "approve") {
         setShowBurst(true);
         setTimeout(() => setShowBurst(false), 900);
-        toast({
-          title: "Change approved",
-          description: data.reasoning,
-          variant: "success",
-        });
+        toast({ title: "Change approved", description: data.reasoning, variant: "success" });
         setDeniedResult(null);
       } else if (data.decision === "deny") {
-        setShakingBlockId(_vars.block.id);
+        setShakingBlockId(vars.block.id);
         setTimeout(() => setShakingBlockId(undefined), 400);
         setDeniedResult(data);
-        toast({
-          title: "Change denied",
-          description: data.reasoning,
-          variant: "destructive",
-        });
+        toast({ title: "Change denied", description: data.reasoning, variant: "destructive" });
       } else {
-        toast({
-          title: "Sent for WFM review",
-          description: data.reasoning,
-          variant: "review",
-        });
+        toast({ title: "Sent for WFM review", description: data.reasoning, variant: "review" });
       }
     },
     onError: (err, vars) => {
-      moveBlockStart(vars.repId, vars.block.id, -vars.deltaMinutes);
+      moveBlockStart(vars.consultantId, vars.block.id, -vars.deltaMinutes);
       setHighlightedBlockId(undefined);
       toast({
         title: "Request failed",
@@ -131,26 +118,30 @@ export function DashboardPage() {
 
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight">Team dashboard</h2>
+          <h2 className="text-xl font-semibold tracking-tight">Consultant schedules</h2>
           <p className="text-sm text-muted-foreground">{todayLabel} · America/Chicago</p>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Click a <span className="text-emerald-400">phone</span> block to move shift start (demo flow)
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>
+            Click a <span className="text-emerald-400">phone</span> block for a one-off start-time
+            change
+          </span>
+          <Link to="/changes" className="text-pitstop-go hover:underline">
+            Other change types →
+          </Link>
           {isDevPreview() && (
-            <span className="ml-2 rounded bg-amber-500/20 px-2 py-0.5 text-amber-300">
-              Preview mode — no Supabase
-            </span>
+            <span className="rounded bg-amber-500/20 px-2 py-0.5 text-amber-300">Preview mode</span>
           )}
-        </p>
+        </div>
       </div>
 
       <section className="rounded-xl border border-border bg-card/50 p-3 shadow-sm sm:p-5">
         <TimelineAxis />
         <div className="mt-1">
-          {team.map((rep) => (
-            <RepTimelineRow
-              key={rep.id}
-              rep={rep}
+          {team.map((consultant) => (
+            <ConsultantTimelineRow
+              key={consultant.id}
+              consultant={consultant}
               highlightedBlockId={highlightedBlockId}
               shakingBlockId={shakingBlockId}
               onBlockClick={handleBlockClick}
@@ -174,8 +165,8 @@ export function DashboardPage() {
         onSubmit={(delta) => {
           if (!modalContext) return;
           mutation.mutate({
-            repId: modalContext.rep.id,
-            repName: modalContext.rep.name,
+            consultantId: modalContext.consultant.id,
+            consultantName: modalContext.consultant.name,
             block: modalContext.block,
             deltaMinutes: delta,
           });

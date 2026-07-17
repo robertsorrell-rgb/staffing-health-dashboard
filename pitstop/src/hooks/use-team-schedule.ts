@@ -1,20 +1,20 @@
 import { useCallback, useState } from "react";
 import { MOCK_TEAM } from "@/data/mock-team";
-import type { ScheduleBlock, TeamRep } from "@/types/schedule";
+import type { ScheduleBlock, TeamConsultant } from "@/types/schedule";
 
 export function useTeamSchedule() {
-  const [team, setTeam] = useState<TeamRep[]>(() =>
+  const [team, setTeam] = useState<TeamConsultant[]>(() =>
     structuredClone(MOCK_TEAM),
   );
 
   const updateBlock = useCallback(
-    (repId: string, blockId: string, updater: (block: ScheduleBlock) => ScheduleBlock) => {
+    (consultantId: string, blockId: string, updater: (block: ScheduleBlock) => ScheduleBlock) => {
       setTeam((prev) =>
-        prev.map((rep) => {
-          if (rep.id !== repId) return rep;
+        prev.map((c) => {
+          if (c.id !== consultantId) return c;
           return {
-            ...rep,
-            blocks: rep.blocks.map((b) => (b.id === blockId ? updater(b) : b)),
+            ...c,
+            blocks: c.blocks.map((b) => (b.id === blockId ? updater(b) : b)),
           };
         }),
       );
@@ -23,8 +23,8 @@ export function useTeamSchedule() {
   );
 
   const moveBlockStart = useCallback(
-    (repId: string, blockId: string, deltaMinutes: number) => {
-      updateBlock(repId, blockId, (b) => ({
+    (consultantId: string, blockId: string, deltaMinutes: number) => {
+      updateBlock(consultantId, blockId, (b) => ({
         ...b,
         startMinutes: Math.max(0, b.startMinutes + deltaMinutes),
       }));

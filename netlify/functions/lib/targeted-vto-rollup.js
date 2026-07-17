@@ -123,6 +123,11 @@ function detectOffersColumns(headers) {
   let status = idx('status');
   if (status < 0) status = H.findIndex((h) => h === 'offer status' || h.endsWith(' status'));
 
+  let offerId = idx('offer id');
+  if (offerId < 0) offerId = H.findIndex((h) => h.includes('offer') && h.includes('id'));
+
+  const notes = idx('notes');
+
   return {
     sent_at: sentAt,
     queue,
@@ -132,6 +137,8 @@ function detectOffersColumns(headers) {
     hold_hours_header: holdHoursHeader,
     name,
     status,
+    offer_id: offerId,
+    notes,
   };
 }
 
@@ -242,4 +249,7 @@ function rollupTargetedOffers(rowsToday, headers) {
 module.exports = {
   rollupTargetedOffers,
   serialToChicagoDateTime,
+  detectOffersColumns,
+  normalizeStatus,
+  rowHours,
 };

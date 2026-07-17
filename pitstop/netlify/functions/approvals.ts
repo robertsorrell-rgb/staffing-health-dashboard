@@ -11,12 +11,17 @@ export const handler = apiHandler(async (event) => {
   const admin = getSupabaseAdmin();
   let query = admin
     .from("change_requests")
-    .select("id, change_type, status, capacity_decision, capacity_reasoning, rep_name, created_at, updated_at")
+    .select(
+      "id, change_type, status, capacity_decision, capacity_reasoning, alternatives, rep_name, payload, created_at, updated_at",
+    )
     .order("created_at", { ascending: false })
     .limit(50);
 
   if (profile.role === "manager") {
     query = query.eq("requester_id", profile.id);
+  } else {
+    // WFM: surface review queue first, then recent history
+    query = query.in("status", ["review", "pending", "approved", "denied"]);
   }
 
   const { data, error } = await query;

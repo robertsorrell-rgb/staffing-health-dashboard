@@ -1,46 +1,62 @@
 # Pitstop
 
-Workforce management cockpit for contact center managers — fast schedule edits with capacity-aware auto-approval.
+Managers submit **schedule changes for consultants** on their team — one-off edits, meeting adds, and permanent pattern updates — with capacity-aware auto-approval before writes hit Assembled.
+
+**In scope:** schedule change requests managers file on behalf of consultants.  
+**Out of scope:** VTO/OT offers, adherence monitoring, and other WFM-entered actions for reps.
+
+## Change types
+
+| Category | Examples |
+|----------|----------|
+| One-off | Move block start/end, change activity type, delete, add segment |
+| Meeting | Add team meeting (Meeting Governor logic) |
+| Permanent | Standing lunch, recurring block, template updates |
 
 ## Stack
 
-- **Frontend:** React 18, Vite, TypeScript, Tailwind, TanStack Query, React Router, Framer Motion
-- **Backend:** Netlify Functions (TypeScript)
-- **Auth & data:** Supabase (Google OAuth, Postgres + RLS)
+React 18 · Vite · Netlify Functions · Supabase (auth + audit)
 
 ## Local development
 
 ```bash
 cd pitstop
-cp .env.example .env
-# Fill VITE_SUPABASE_* and SUPABASE_* (see checklist below)
 npm install
-npm run dev
+npm run dev:vite    # UI preview — http://localhost:5173 (no Supabase needed)
+npm run dev         # Full stack with functions — http://localhost:8888
 ```
 
-Open **http://localhost:8888** (Netlify Dev proxies Vite on 5173 and functions on the same port).
+## Netlify
 
-For Vite-only UI work without functions:
+Base directory: **`pitstop`**. See `.env.example` for variables.
+
+## Integrations (existing bots)
+
+Pitstop wires to automation you already run in Apps Script:
+
+| Change type | Existing bot | Doc |
+|-------------|--------------|-----|
+| `permanent_schedule_change` | Permanent Schedule Publisher (Schedule Changes tab) | `docs/INTEGRATIONS.md` |
+| `add_meeting` | Meeting Governor | `docs/INTEGRATIONS.md` |
+| One-off block edits | Assembled API directly | `netlify/functions/_shared/assembled-client.ts` |
+
+Server adapters (stubs → port GAS logic): `permanent-schedule.ts`, `meeting-governor-bridge.ts`, `schedule-commit.ts`.
+
+## Simulation mode (no Supabase / sheets)
+
+With no `.env` (or `VITE_DEV_PREVIEW=true`), the app runs in **simulation mode**:
+
+- Amber banner at top — toggle **Manager** vs **WFM** view, or **Reset demo data**
+- Submissions stored in `localStorage` with three seeded examples
+- Fake sheet logic: meetings at **1–3pm** → deny + alternatives; permanent → WFM review; large one-off moves → deny
 
 ```bash
-npm run dev:vite
-# http://localhost:5173 — API calls proxy to :8888 if Netlify Dev is also running
+cd pitstop && npm install && npm run dev:vite
+# http://localhost:5173
 ```
 
-## Netlify deploy
+Try: **Request → Add meeting** (default 2–3pm) → denied → **Submissions**. Switch to **WFM view** → approve Sam’s permanent change.
 
-1. Create a Netlify site linked to your GitHub repo.
-2. Set **Base directory** to `pitstop`.
-3. Build command: `npm run build` (default from `netlify.toml`).
-4. Publish directory: `dist`.
-5. Add environment variables from `.env.example` in the Netlify UI.
+## v0.1 slice
 
-Preview deploys run on every PR; production on `main` when you push.
-
-## Project layout
-
-See repo root spec — `src/` for UI, `netlify/functions/` for API, `supabase/migrations/` for schema.
-
-## v0.1 vertical slice
-
-Dashboard → click green **Phone** block → move start (+30 min default) → `POST /api/schedule-change` → mock capacity engine → Supabase `change_requests` + `audit_log` → optimistic UI + success toast.
+Team view → click **Phone** block → move start → capacity check → submit (mocked locally without Supabase).

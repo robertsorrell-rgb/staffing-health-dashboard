@@ -269,4 +269,25 @@ async function readSheetFilterWeek(spreadsheetId, tab, a1Suffix = 'A1:Z10000', o
   return { headers, rowsWeek, rowsAll: body, dateCol, today: todayCTDateStr(), weekStartYmd, weekEndYmd };
 }
 
-module.exports = { readSheetFilterToday, readSheetFilterWeek, readBobbotHistoryBody };
+/**
+ * Full tab body (row 1 = headers), rows padded to header width. No date filter.
+ * Use for cross-row rollups (e.g. week activity by Sent At) where the Date column
+ * may be a range string ("yyyy-MM-dd to yyyy-MM-dd") and sheet filters would drop rows.
+ */
+async function readSheetBody(spreadsheetId, tab, a1Suffix = 'A1:ZZ20000') {
+  const t = (tab || 'Sheet1').replace(/'/g, "''");
+  const range = `'${t}'!${a1Suffix}`;
+  const values = await getSheetValues(spreadsheetId, range, {
+    valueRenderOption: 'UNFORMATTED_VALUE',
+    dateTimeRenderOption: 'SERIAL_NUMBER',
+  });
+  if (!values.length) {
+    return { headers: [], rows: [] };
+  }
+  const headers = (values[0] || []).map((h) => String(h || '').trim());
+  const hl = headers.length;
+  const rows = values.slice(1).map((row) => padRowToHeaders(row, hl));
+  return { headers, rows };
+}
+
+module.exports = { readSheetFilterToday, readSheetFilterWeek, readBobbotHistoryBody, readSheetBody };

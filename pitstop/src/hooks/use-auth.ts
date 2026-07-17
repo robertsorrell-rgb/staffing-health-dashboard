@@ -33,7 +33,13 @@ export function useAuth() {
     supabaseConfigured,
     devPreview: preview,
     profile: preview
-      ? (DEV_PREVIEW_PROFILE as UserProfile)
+      ? ({
+          ...DEV_PREVIEW_PROFILE,
+          role:
+            (typeof sessionStorage !== "undefined"
+              ? (sessionStorage.getItem("pitstop-sim-role") as UserProfile["role"])
+              : null) || "manager",
+        } as UserProfile)
       : (profileQuery.data?.profile as UserProfile | undefined),
     isLoadingProfile: profileQuery.isLoading,
     profileError: profileQuery.error,
