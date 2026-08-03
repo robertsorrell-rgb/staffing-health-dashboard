@@ -1,5 +1,5 @@
 /***************************************
- * MEETING GOVERNOR v1.8.9
+ * MEETING GOVERNOR v1.9.0
  * Meeting Capacity Gate for Consumer Sales
  *
  * OVERVIEW:
@@ -20,7 +20,8 @@
  *   Script Properties: ASSEMBLED_API_KEY, SLACK_BOT_TOKEN, MG_WEB_APP_URL
  *   Deploy → Web app → Execute as: Me → Who has access: Anyone
  *
- * CHANGELOG (header): v1.8.9 — FIX queue map for New Sales / ELD managers (e.g. Kimberly Murdock): normalize work-group keys, expand aliases (K6, E&LD, singular Learning Difference, People-tab labels), majority-vote queue from full manager team when filtered attendees lack work groups; menu Reprocess Selected Row.
+ * CHANGELOG (header): v1.9.0 — Calendar lifecycle parity with V2: approved short/small meetings now commit before inviting, every event receives a unique Meet conference, cancel propagates and verifies organizer deletion, and extend/add-reps preserve conference data.
+ *   v1.8.9 — FIX queue map for New Sales / ELD managers (e.g. Kimberly Murdock): normalize work-group keys, expand aliases (K6, E&LD, singular Learning Difference, People-tab labels), majority-vote queue from full manager team when filtered attendees lack work groups; menu Reprocess Selected Row.
  *   v1.8.8 — Calendar invites: manager + consultants as guests; Shilo Gator/Wheeler both invited; fall back to script primary calendar when manager share missing; calendar no longer skipped solely by TEST_MODE.
  *   v1.8.7 — Unauthorized meeting scan: WFM Slack only for Flagged Meetings (not tool-submitted); min 4 reps + 30 min; Consumer Sales five queues only; dedupe by manager/date/start + Slack already sent.
  *   v1.8.6 — Meeting policy: alt/split recommendations 9 AM–5 PM CT Mon–Fri; min post-meeting net buffer -2 (Config tab keys MIN_NET_STAFFING_BUFFER, ALT_SEARCH_START_HOUR, ALT_SEARCH_END_HOUR).
@@ -65,7 +66,7 @@
  * CONSTANTS
  ***************************************/
 const MG = {
-  VERSION: 'v1.8.9',
+  VERSION: 'v1.9.0',
   /** Requests with timestamp (col A) on/after this date use column L manual-override ping tracking. */
   MANUAL_OVERRIDE_CUTOFF: '2026-06-09',
   INTRADAY_LEADS: {
@@ -818,7 +819,7 @@ function mgProcessManualApproval_(sheet, row, rowNum) {
     headers, commitTargets, meetingStart, meetingEnd, rowNum, title, managerEmail, managerName
   );
 
-  const meetLink = mgGetManagerMeetLink_(managerEmail, managerName);
+  const meetLink = mgMeetLinkForCommit_(commitResult, managerEmail, managerName);
 
   var decision;
   var slackMsg;
@@ -973,20 +974,15 @@ function mgProcessRow_(sheet, row, rowNum) {
     }
   }
 
+  var autoApproveReason = '';
   if (!isWfmAuto) {
     const minDurationMins = Number(config[MG.CFG.MIN_DURATION_MINUTES] || 30);
     const durationMins    = (meetingEnd.getTime() - meetingStart.getTime()) / 60000;
     if (durationMins < minDurationMins) {
-      const meetLink = mgGetManagerMeetLink_(managerEmail, managerName);
-      const meetLine = meetLink ? '\n\n\uD83C\uDF9E Your Google Meet link: ' + meetLink : '';
-      const msg = mgSlackMeetingHeader_(MG_SLACK_LABEL.BOOKED, title) +
-        'Date: ' + mgFriendlyDate_(dateStr) + ', ' + mgFriendlyTime_(startStr) + '\u2013' + mgFriendlyTime_(endStr) + ' CT\n' +
-        'Meetings under ' + minDurationMins + ' minutes are auto-booked. You\'re good to go!' + meetLine;
-      mgWriteResult_(sheet, rowNum, 'APPROVED — under duration threshold', '');
-      mgSlackDmSubmitter_(submitterRaw, msg);
+      autoApproveReason = 'under duration threshold';
       mgAudit_('DURATION_CHECK', 'Row ' + rowNum,
-        'Auto-approved — ' + durationMins + ' min is under threshold of ' + minDurationMins + ' min', 'OK');
-      return;
+        'Eligible for auto-approval — ' + durationMins + ' min is under threshold of ' +
+        minDurationMins + ' min; continuing through schedule + Calendar commit', 'OK');
     }
   }
 
@@ -1056,7 +1052,7 @@ function mgProcessRow_(sheet, row, rowNum) {
       ? 'APPROVED (L7) — Assembled Error: ' + failedNames
       : (testMode ? 'APPROVED (L7) — TEST: added to ' + (commitTargets[0] ? commitTargets[0].name : '') : 'APPROVED (L7)');
 
-    const meetLink = mgGetManagerMeetLink_(managerEmail, managerName);
+    const meetLink = mgMeetLinkForCommit_(commitResult, managerEmail, managerName);
     const managerMsg = mgWrapApprovalSlack_(title, dateStr, startStr, endStr,
       'You\'re booked — added to your team\'s schedules.',
       mgFormatMeetSlackLine_(meetLink, commitResult.calendar), commitResult, '', {
@@ -1080,11 +1076,6 @@ function mgProcessRow_(sheet, row, rowNum) {
   }
 
   const queue = mgResolveTeamQueue_(team, managerName, submitterRaw, roster);
-  if (!queue) {
-    mgWriteResult_(sheet, rowNum, 'ERROR',
-      'Could not map work group to Assembled queue for ' + managerName + '\'s team.');
-    return;
-  }
 
   const apiKey  = mgGetApiKey_();
   const headers = mgAuthHeaders_(apiKey);
@@ -1108,16 +1099,67 @@ function mgProcessRow_(sheet, row, rowNum) {
   }
 
   const minAttendees = Number(config[MG.CFG.MIN_ATTENDEES] || 3);
-  if (scheduledAttendees.length < minAttendees) {
-    const meetLink = mgGetManagerMeetLink_(managerEmail, managerName);
-    const meetLine = meetLink ? '\n\n\uD83C\uDF9E Your Google Meet link: ' + meetLink : '';
-    const msg = mgSlackMeetingHeader_(MG_SLACK_LABEL.BOOKED, title) +
-      'Date: ' + mgFriendlyDate_(dateStr) + ', ' + mgFriendlyTime_(startStr) + '\u2013' + mgFriendlyTime_(endStr) + ' CT\n' +
-      'Meetings with fewer than ' + minAttendees + ' scheduled attendees are auto-booked. You\'re good to go!' + meetLine;
-    mgWriteResult_(sheet, rowNum, 'APPROVED — under attendee threshold', '');
-    mgSlackDmSubmitter_(submitterRaw, msg);
+  if (autoApproveReason || scheduledAttendees.length < minAttendees) {
+    var thresholdReason = autoApproveReason || 'under attendee threshold';
+    var thresholdText = autoApproveReason
+      ? 'Meetings under ' + Number(config[MG.CFG.MIN_DURATION_MINUTES] || 30) +
+        ' minutes are auto-booked.'
+      : 'Meetings with fewer than ' + minAttendees + ' scheduled attendees are auto-booked.';
+    var thresholdTestMode = mgIsTestMode_();
+    var thresholdTargets = thresholdTestMode
+      ? scheduledAttendees.slice(0, 1)
+      : scheduledAttendees;
+    var thresholdCommit = mgCommitMeetingToAssembled_(
+      headers,
+      thresholdTargets,
+      meetingStart,
+      meetingEnd,
+      rowNum,
+      title,
+      managerEmail,
+      managerName
+    );
+    var thresholdMeetLink = mgMeetLinkForCommit_(
+      thresholdCommit,
+      managerEmail,
+      managerName
+    );
+    var thresholdFooter = thresholdTestMode && thresholdTargets[0]
+      ? '\n\n_\u26a0\ufe0f TEST MODE — only ' + thresholdTargets[0].name +
+        '\'s schedule was updated in Assembled._'
+      : '';
+    var thresholdMsg = mgWrapApprovalSlack_(
+      title,
+      dateStr,
+      startStr,
+      endStr,
+      thresholdText + ' You\'re good to go!',
+      mgFormatMeetSlackLine_(thresholdMeetLink, thresholdCommit.calendar),
+      thresholdCommit,
+      thresholdFooter,
+      {
+        managerRaw: managerRaw,
+        submitterRaw: submitterRaw,
+        sourceRowNum: rowNum,
+        managerEmail: managerEmail,
+        manualRaw: String(row[MG.COLS.ATTENDEES - 1] || '')
+      }
+    );
+    var thresholdDecision = thresholdCommit.failed.length
+      ? 'APPROVED — ' + thresholdReason + ' — Assembled Error: ' +
+        thresholdCommit.failed.join(', ')
+      : 'APPROVED — ' + thresholdReason;
+    mgWriteResult_(sheet, rowNum, thresholdDecision, '');
+    mgSlackDmSubmitter_(submitterRaw, thresholdMsg);
     mgAudit_('ATTENDEE_CHECK', 'Row ' + rowNum,
-      'Auto-approved — ' + scheduledAttendees.length + ' attendees is under threshold of ' + minAttendees, 'OK');
+      'Auto-approved + committed — reason=' + thresholdReason +
+      ' attendees=' + scheduledAttendees.length, thresholdCommit.failed.length ? 'WARN' : 'OK');
+    return;
+  }
+
+  if (!queue) {
+    mgWriteResult_(sheet, rowNum, 'ERROR',
+      'Could not map work group to Assembled queue for ' + managerName + '\'s team.');
     return;
   }
 
@@ -1154,7 +1196,7 @@ function mgProcessRow_(sheet, row, rowNum) {
       headers, commitTargets, meetingStart, meetingEnd, rowNum, title, managerEmail, managerName
     );
 
-    const meetLink = mgGetManagerMeetLink_(managerEmail, managerName);
+    const meetLink = mgMeetLinkForCommit_(commitResult, managerEmail, managerName);
 
     var decision;
     var slackMsg;
@@ -1391,7 +1433,7 @@ function mgProcessSuperSubmitApprove_(sheet, rowNum, roster, managerName, manage
     rec += ' | Unmatched: ' + poolRes.unmatched.join('; ');
   }
 
-  var meetLink = mgGetManagerMeetLink_(managerEmail, managerName);
+  var meetLink = mgMeetLinkForCommit_(commitResult, managerEmail, managerName);
   var meetLine = mgFormatMeetSlackLine_(meetLink, commitResult.calendar);
 
   var intro = 'Auto-booked (admin submitter) — Meeting blocks written for *' + scheduledAttendees.length +
@@ -1448,7 +1490,7 @@ function mgProcessWfmAutoApprove_(sheet, rowNum, team, title, dateStr, startStr,
     rec = 'Unmatched manual names (ignored): ' + unmatchedTokens.join('; ');
   }
 
-  const meetLink = mgGetManagerMeetLink_(managerEmail, managerName);
+  const meetLink = mgMeetLinkForCommit_(commitResult, managerEmail, managerName);
   const meetLine = mgFormatMeetSlackLine_(meetLink, commitResult.calendar);
 
   var wfmIntro = 'This meeting was auto-booked as a WFM submission.';
@@ -1540,8 +1582,6 @@ function mgManagerCalendarEmails_(managerName, managerEmail) {
     emails.push(e);
   };
   if (managerName) {
-    add(mgResolveManagerGoogleEmail_(managerName));
-    add(mgManagerNameToEmail_(managerName));
     var canonKey = mgNormManagerKey_(managerName);
     var aliasCanon = MG_MANAGER_ALIASES[canonKey];
     if (aliasCanon) {
@@ -1549,6 +1589,8 @@ function mgManagerCalendarEmails_(managerName, managerEmail) {
       add(mgManagerNameToEmail_(aliasCanon));
       canonKey = mgNormManagerKey_(aliasCanon);
     }
+    add(mgResolveManagerGoogleEmail_(managerName));
+    add(mgManagerNameToEmail_(managerName));
     var extras = MG_MANAGER_EXTRA_EMAILS[canonKey] || [];
     for (var xi = 0; xi < extras.length; xi++) add(extras[xi]);
   }
@@ -1697,7 +1739,8 @@ function mgWrapApprovalSlack_(title, dateStr, startStr, endStr, introLine, meetL
       sourceRowNum:    meta.sourceRowNum || '',
       activityJson:    JSON.stringify(commitResult.activityCommits),
       calendarEventId: (commitResult.calendar && commitResult.calendar.eventId) || '',
-      managerEmail:    meta.managerEmail || ''
+      managerEmail:    (commitResult.calendar && commitResult.calendar.calendarEmail) ||
+        meta.managerEmail || ''
     });
     if (!meta.recurringId && !meta.skipMakeRecurring) {
       linkExtras.makeRecurringToken = mgCreateRecurringOptInToken_({
@@ -2301,7 +2344,15 @@ function mgCommitMeetingToAssembled_(headers, scheduledAttendees, meetingStart, 
   const succeeded = [];
   const failed    = [];
   const activityCommits = [];
-  const emptyCal = { sent: false, invitedNames: [], eventId: '' };
+  const emptyCal = {
+    sent: false,
+    invitedNames: [],
+    attendeeEmails: [],
+    eventId: '',
+    calendarEmail: '',
+    meetLink: '',
+    htmlLink: ''
+  };
 
   const activityTypeId = mgResolveMeetingActivityTypeId_(headers);
   if (!activityTypeId) {
@@ -2369,15 +2420,58 @@ function mgCommitMeetingToAssembled_(headers, scheduledAttendees, meetingStart, 
   return { succeeded: succeeded, failed: failed, calendar: calendar, activityCommits: activityCommits };
 }
 
+function mgExtractMeetLinkFromCalendarEvent_(event) {
+  if (!event) return '';
+  var hangout = String(event.hangoutLink || '').trim();
+  if (hangout.indexOf('meet.google.com') !== -1) return hangout;
+  var entryPoints = event.conferenceData && event.conferenceData.entryPoints
+    ? event.conferenceData.entryPoints
+    : [];
+  for (var i = 0; i < entryPoints.length; i++) {
+    var uri = String(entryPoints[i] && entryPoints[i].uri || '').trim();
+    if (uri.indexOf('meet.google.com') !== -1) return uri;
+  }
+  return '';
+}
+
+function mgResolveCreatedMeetLink_(calendarId, event) {
+  var link = mgExtractMeetLinkFromCalendarEvent_(event);
+  if (link || !event || !event.id) return link;
+  for (var attempt = 0; attempt < 5; attempt++) {
+    Utilities.sleep(1000);
+    try {
+      event = Calendar.Events.get(calendarId, event.id);
+      link = mgExtractMeetLinkFromCalendarEvent_(event);
+      if (link) return link;
+    } catch (err) {
+      break;
+    }
+  }
+  return '';
+}
+
+function mgMeetLinkForCommit_(commitResult, managerEmail, managerName) {
+  var calendarLink = commitResult && commitResult.calendar
+    ? String(commitResult.calendar.meetLink || '').trim()
+    : '';
+  return calendarLink || mgGetManagerMeetLink_(managerEmail, managerName) || '';
+}
+
 /**
- * After Assembled Meeting activities succeed: create a Google Calendar event and invite the
- * manager (all known emails, including rename aliases) + reps who succeeded as guests.
- * Tries manager calendars first; falls back to script runner primary so invites still send when
- * the manager has not shared their calendar. sendUpdates=all. Skipped only when
- * GOOGLE_CALENDAR_INVITES_ENABLED is FALSE (not skipped solely for TEST_MODE).
+ * After Assembled Meeting activities succeed: create one organizer event with a unique Google
+ * Meet conference and invite the manager aliases + successfully committed reps. Manager calendars
+ * are preferred; the script runner's primary calendar is the final fallback.
  */
 function mgMaybeCreateManagerCalendarInvite_(managerEmail, title, meetingStart, meetingEnd, commitAttemptReps, succeededNames, rowRef, managerName) {
-  var none = { sent: false, invitedNames: [], eventId: '' };
+  var none = {
+    sent: false,
+    invitedNames: [],
+    attendeeEmails: [],
+    eventId: '',
+    calendarEmail: '',
+    meetLink: '',
+    htmlLink: ''
+  };
   var config = mgLoadConfig_();
   if (!mgConfigBool_(config, MG.CFG.CALENDAR_INVITES, true)) {
     mgAudit_('CALENDAR_INVITE', 'Row ' + rowRef, 'Skipped — GOOGLE_CALENDAR_INVITES_ENABLED is FALSE', 'INFO');
@@ -2394,13 +2488,15 @@ function mgMaybeCreateManagerCalendarInvite_(managerEmail, title, meetingStart, 
     mgAudit_('CALENDAR_INVITE', 'Row ' + rowRef, 'No successful commits to invite', 'INFO');
     return none;
   }
+  var testMode = mgIsTestMode_();
   var invitedNames = invited.map(function(r) { return r.name; });
   var managerEmails = mgManagerCalendarEmails_(managerName, managerEmail);
+  if (testMode) {
+    managerEmails = ['robert.sorrell@varsitytutors.com'];
+  }
 
-  var meetLink = mgGetManagerMeetLink_(managerEmail, managerName);
   var desc = (title || 'Team meeting') + '\n\n';
-  if (meetLink) desc += 'Join (Google Meet): ' + meetLink + '\n\n';
-  desc += 'Meeting blocks added in Assembled for this time.';
+  desc += 'Meeting blocks added in Assembled for this time. A Google Meet conference is attached.';
 
   var startDt = Utilities.formatDate(meetingStart, MG.TZ, "yyyy-MM-dd'T'HH:mm:ss");
   var endDt   = Utilities.formatDate(meetingEnd,   MG.TZ, "yyyy-MM-dd'T'HH:mm:ss");
@@ -2414,41 +2510,62 @@ function mgMaybeCreateManagerCalendarInvite_(managerEmail, title, meetingStart, 
     attendees.push({ email: e });
   };
   for (var mi = 0; mi < managerEmails.length; mi++) addAttendee(managerEmails[mi]);
-  for (var ri = 0; ri < invited.length; ri++) addAttendee(invited[ri].email);
-
-  var event = {
-    summary:     title || 'Team meeting',
-    description: desc,
-    start:       { dateTime: startDt, timeZone: MG.TZ },
-    end:         { dateTime: endDt,   timeZone: MG.TZ },
-    attendees:   attendees,
-    guestsCanModify: false,
-    guestsCanInviteOthers: false,
-    reminders: { useDefault: true }
-  };
+  if (!testMode) {
+    for (var ri = 0; ri < invited.length; ri++) addAttendee(invited[ri].email);
+  }
 
   // Host calendars to try: manager mailboxes first, then script runner primary (always works).
-  var hostCalendars = managerEmails.slice();
+  var hostCalendars = testMode ? ['primary'] : managerEmails.slice();
   if (hostCalendars.indexOf('primary') === -1) hostCalendars.push('primary');
 
   var lastErr = '';
   for (var ci = 0; ci < hostCalendars.length; ci++) {
     var calendarId = hostCalendars[ci];
     try {
+      var eventAttendees = attendees.filter(function(attendee) {
+        return calendarId === 'primary' ||
+          String(attendee.email || '').toLowerCase() !== String(calendarId || '').toLowerCase();
+      });
+      var event = {
+        summary:     title || 'Team meeting',
+        description: desc,
+        start:       { dateTime: startDt, timeZone: MG.TZ },
+        end:         { dateTime: endDt,   timeZone: MG.TZ },
+        attendees:   eventAttendees,
+        guestsCanModify: false,
+        guestsCanInviteOthers: false,
+        reminders: { useDefault: true },
+        conferenceData: {
+          createRequest: {
+            requestId: 'mg-event-' + Utilities.getUuid(),
+            conferenceSolutionKey: { type: 'hangoutsMeet' }
+          }
+        }
+      };
       var created = Calendar.Events.insert(event, calendarId, {
-        sendUpdates: 'all'
+        sendUpdates: testMode ? 'none' : 'all',
+        conferenceDataVersion: 1
       });
       var evId = created && created.id ? created.id : '';
+      var generatedMeetLink = mgResolveCreatedMeetLink_(calendarId, created);
+      var meetLink = generatedMeetLink ||
+        mgGetManagerMeetLink_(managerEmail, managerName) || '';
       var hostLabel = calendarId === 'primary' ? 'script primary' : calendarId;
       var via = (calendarId === 'primary' || ci > 0) ? ' (fallback)' : '';
       mgAudit_('CALENDAR_INVITE', 'Row ' + rowRef,
         'Event on ' + hostLabel + via + ' | Guests: manager emails [' + managerEmails.join(', ') +
-        '] + ' + invited.length + ' rep(s) | id=' + evId, 'OK');
+        '] + ' + invited.length + ' rep(s) | id=' + evId +
+        ' | uniqueMeet=' + !!generatedMeetLink +
+        ' | testMode=' + testMode, 'OK');
       return {
         sent: true,
-        invitedNames: invitedNames,
+        invitedNames: testMode ? ['Robert Sorrell (test only)'] : invitedNames,
+        attendeeEmails: eventAttendees.map(function(a) { return a.email; }),
         eventId: evId,
-        calendarEmail: calendarId === 'primary' ? 'primary' : calendarId
+        calendarEmail: calendarId === 'primary' ? 'primary' : calendarId,
+        meetLink: meetLink,
+        uniqueMeet: !!generatedMeetLink,
+        htmlLink: created && created.htmlLink ? created.htmlLink : ''
       };
     } catch (err) {
       lastErr = String(err);
@@ -3148,8 +3265,17 @@ function mgMaybeDeleteCalendarEvent_(managerEmail, eventId, rowRef, managerName)
   }
   for (var i = 0; i < calendars.length; i++) {
     try {
-      Calendar.Events.remove(calendars[i], eventId);
-      mgAudit_('CALENDAR_CANCEL', 'Row ' + rowRef, 'Removed event ' + eventId + ' from ' + calendars[i], 'OK');
+      Calendar.Events.remove(calendars[i], eventId, { sendUpdates: 'all' });
+      var verifiedGone = false;
+      try {
+        var remaining = Calendar.Events.get(calendars[i], eventId);
+        verifiedGone = !remaining || String(remaining.status || '').toLowerCase() === 'cancelled';
+      } catch (verifyErr) {
+        verifiedGone = true;
+      }
+      mgAudit_('CALENDAR_CANCEL', 'Row ' + rowRef,
+        'Removed organizer event ' + eventId + ' from ' + calendars[i] +
+        ' with attendee updates | verified=' + verifiedGone, verifiedGone ? 'OK' : 'WARN');
       return true;
     } catch (err) {
       mgAudit_('CALENDAR_CANCEL', 'Row ' + rowRef,
@@ -3464,26 +3590,67 @@ function mgExtendMeetingActivityCommit_(headers, commit, meetingTypeId, extraSec
   }
 }
 
-function mgExtendCalendarEvent_(managerEmail, eventId, newMeetingEnd, rowRef, managerName) {
-  if (!eventId || !newMeetingEnd) return false;
+function mgMoveCalendarEvent_(managerEmail, eventId, newMeetingStart, newMeetingEnd, rowRef, managerName) {
+  if (!eventId || (!newMeetingStart && !newMeetingEnd)) {
+    return { ok: false, reason: 'missing_event_or_window' };
+  }
   var calendarEmails = mgManagerCalendarEmails_(managerName, managerEmail);
   if (calendarEmails.indexOf('primary') === -1) calendarEmails.push('primary');
-  var endDt = Utilities.formatDate(newMeetingEnd, MG.TZ, "yyyy-MM-dd'T'HH:mm:ss");
+  var patch = {};
+  var startDt = newMeetingStart
+    ? Utilities.formatDate(newMeetingStart, MG.TZ, "yyyy-MM-dd'T'HH:mm:ss")
+    : '';
+  var endDt = newMeetingEnd
+    ? Utilities.formatDate(newMeetingEnd, MG.TZ, "yyyy-MM-dd'T'HH:mm:ss")
+    : '';
+  if (startDt) patch.start = { dateTime: startDt, timeZone: MG.TZ };
+  if (endDt) patch.end = { dateTime: endDt, timeZone: MG.TZ };
+  var action = newMeetingStart ? 'CALENDAR_MOVE' : 'CALENDAR_EXTEND';
   var i;
   for (i = 0; i < calendarEmails.length; i++) {
     try {
-      var event = Calendar.Events.get(calendarEmails[i], eventId);
-      event.end = { dateTime: endDt, timeZone: MG.TZ };
-      Calendar.Events.update(event, calendarEmails[i], eventId, { sendUpdates: 'all' });
-      mgAudit_('CALENDAR_EXTEND', rowRef,
-        'Extended event ' + eventId + ' on ' + calendarEmails[i] + ' to ' + endDt, 'OK');
-      return true;
+      Calendar.Events.patch(patch, calendarEmails[i], eventId, {
+        sendUpdates: 'all',
+        conferenceDataVersion: 1
+      });
+      var verified = Calendar.Events.get(calendarEmails[i], eventId);
+      var verifiedStart = !startDt ||
+        String(verified && verified.start && verified.start.dateTime || '').indexOf(startDt) === 0;
+      var verifiedEnd = !endDt ||
+        String(verified && verified.end && verified.end.dateTime || '').indexOf(endDt) === 0;
+      var meetPreserved = !!mgExtractMeetLinkFromCalendarEvent_(verified);
+      mgAudit_(action, rowRef,
+        'Updated event ' + eventId + ' on ' + calendarEmails[i] +
+        (startDt ? ' | start=' + startDt : '') +
+        (endDt ? ' | end=' + endDt : '') +
+        ' | verified=' + (verifiedStart && verifiedEnd) +
+        ' | meetPreserved=' + meetPreserved,
+        verifiedStart && verifiedEnd ? 'OK' : 'WARN');
+      return {
+        ok: verifiedStart && verifiedEnd,
+        calendarEmail: calendarEmails[i],
+        eventId: eventId,
+        meetLink: mgExtractMeetLinkFromCalendarEvent_(verified),
+        verified: verifiedStart && verifiedEnd
+      };
     } catch (err) {
-      mgAudit_('CALENDAR_EXTEND', rowRef,
+      mgAudit_(action, rowRef,
         'Failed on ' + calendarEmails[i] + ': ' + String(err), 'WARN');
     }
   }
-  return false;
+  return { ok: false, reason: 'event_not_found' };
+}
+
+function mgExtendCalendarEvent_(managerEmail, eventId, newMeetingEnd, rowRef, managerName) {
+  var moved = mgMoveCalendarEvent_(
+    managerEmail,
+    eventId,
+    null,
+    newMeetingEnd,
+    rowRef,
+    managerName
+  );
+  return !!moved.ok;
 }
 
 function mgExecuteExtendToken_(token) {
@@ -3795,7 +3962,10 @@ function mgAddAttendeesToCalendarEvent_(managerEmail, eventId, newReps, rowRef, 
       toInvite.forEach(function(r) {
         event.attendees.push({ email: r.email });
       });
-      Calendar.Events.update(event, calendarId, eventId, { sendUpdates: 'all' });
+      Calendar.Events.update(event, calendarId, eventId, {
+        sendUpdates: 'all',
+        conferenceDataVersion: 1
+      });
       mgAudit_('CALENDAR_ADD_REPS', rowRef,
         'Invited ' + toInvite.length + ' guest(s) on ' + calendarId + ' event ' + eventId, 'OK');
       return {
@@ -4176,7 +4346,7 @@ function mgExecuteBookItToken_(token) {
       headers, commitTargets, meetingStart, meetingEnd, auditRowLabel, title, managerEmail, managerName
     );
 
-    var meetLink = mgGetManagerMeetLink_(managerEmail, managerName);
+    var meetLink = mgMeetLinkForCommit_(commitResult, managerEmail, managerName);
     var meetLine = mgFormatMeetSlackLine_(meetLink, commitResult.calendar);
 
     var okCommit = !commitResult.failed.length;
@@ -6218,7 +6388,11 @@ function mgBookRecurringSlot_(recurringId, recurringRow, targetDateStr, evalResu
     requestRowNum, title, evalResult.managerEmail, evalResult.managerName
   );
 
-  var meetLink = mgGetManagerMeetLink_(evalResult.managerEmail, evalResult.managerName);
+  var meetLink = mgMeetLinkForCommit_(
+    commitResult,
+    evalResult.managerEmail,
+    evalResult.managerName
+  );
   var meetLine = mgFormatMeetSlackLine_(meetLink, commitResult.calendar);
   var okCommit = !commitResult.failed.length;
   var bookFooter = testMode

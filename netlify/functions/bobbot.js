@@ -4,10 +4,51 @@ const { ok, errorResponse, handleOptions, normalizeDateCell } = require('./_shee
 const { readBobbotHistoryBody } = require('./lib/filter-today.js');
 const { currentChicagoWeekSundayToSaturday } = require('./lib/ct.js');
 
-/** Bobbot PTO history — hardcoded workbook/tab (no BOBBOT_* env required). */
+/** Bobbot PTO history — Nerd Desk API (preferred) or legacy Google Sheet. */
 const BOBBOT_SPREADSHEET_ID = '1gndsQQZdIJ5sr0XPP6aafRnQ95ZT4KXPQk5882To4F0';
 const BOBBOT_TAB = 'Bobbot_History';
 const CACHE_SEC = 300;
+
+async function readBobbotHistoryFromNerdDesk() {
+  const base = String(process.env.BOBBOT_HISTORY_API_URL || process.env.NERDDESK_BASE_URL || '')
+    .replace(/\/$/, '');
+  const token = String(process.env.BOBBOT_INTAKE_TOKEN || '').trim();
+  if (!base || !token) return null;
+
+  const res = await fetch(`${base}/api/bobbot?view=history&limit=5000`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(`Nerd Desk bobbot history failed (${res.status}): ${data.error || res.statusText}`);
+  }
+
+  const headers = ['request_date', 'decision', 'queue_name', 'amount_raw', 'payroll_name'];
+  const rows = (data.rows || []).map((r) => [
+    r.request_date,
+    r.decision,
+    r.queue_name,
+    r.amount_raw,
+    r.payroll_name,
+  ]);
+  const dateColsForMatch = [0];
+  const todayParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const today = todayParts;
+
+  return {
+    headers,
+    rows,
+    dateColsForMatch,
+    dateHeader: 'request_date',
+    today,
+    source: 'nerddesk',
+  };
+}
 
 function decisionColumnIndex(headers) {
   const lower = headers.map((h) => String(h || '').trim().toLowerCase());
@@ -176,11 +217,19 @@ exports.handler = async (event) => {
   if (pre) return pre;
 
   try {
-    const { headers, rows, dateColsForMatch, dateHeader, today } = await readBobbotHistoryBody(
-      BOBBOT_SPREADSHEET_ID,
-      BOBBOT_TAB,
-      'A1:ZZ20000'
-    );
+    let headers;
+    let rows;
+    let dateColsForMatch;
+    let dateHeader;
+    let today;
+
+    const nerdDesk = await readBobbotHistoryFromNerdDesk();
+    if (nerdDesk) {
+      ({ headers, rows, dateColsForMatch, dateHeader, today } = nerdDesk);
+    } else {
+      const sheet = await readBobbotHistoryBody(BOBBOT_SPREADSHEET_ID, BOBBOT_TAB, 'A1:ZZ20000');
+      ({ headers, rows, dateColsForMatch, dateHeader, today } = sheet);
+    }
 
     const rowsToday = rows.filter((row) =>
       rowMatchesAnyDate(row, dateColsForMatch, (ymd) => ymd === today)
