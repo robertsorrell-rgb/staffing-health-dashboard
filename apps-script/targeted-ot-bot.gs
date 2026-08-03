@@ -1,5 +1,5 @@
 /*************************************************************
- * TARGETED OT BOT v1.3.7
+ * TARGETED OT BOT v1.3.13
  * Mirrors the Targeted VTO Bot architecture.
  *
  * Core loop (trigger: every 10-15 min):
@@ -72,6 +72,9 @@
  *   then today forward until REVIEW_BLANK_STOP_STREAK (default 3) consecutive
  *   days have no open OT seats in any queue — those days and anything after
  *   are omitted.
+ *   When REVIEW_PEAK_WEEK_START/END are set (default 2026-09-13 → 2026-09-19), the same
+ *   refresh also queries that window and writes a PEAK WEEK block (columns G–K) on Overtime_Review.
+ *   Peak week counts only slots tied to REVIEW_PEAK_SKILL (default OT Tier 1 / OT T1), not all OT.
  *
  * SETUP:
  *   1. Run setupOtWorkbook() once
@@ -92,7 +95,7 @@
  * CONSTANTS
  *************************************************************/
 const OT_APP = {
-  VERSION: 'V1.3.7',
+  VERSION: 'V1.3.13',
 
   /** Row order in Overtime_Review (matches manual workbook). */
   REVIEW_SG_ORDER: ['AL', 'COL', 'ELD', 'HS', 'PC'],
@@ -747,6 +750,452 @@ function otHourBucketLabel_(slotStart, tz) {
   return Utilities.formatDate(slotStart, tz, 'h a');
 }
 
+/** Normalize Config day value to yyyy-MM-dd in workbook timezone. */
+function otNormalizeDayKey_(raw, tz) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = otBuildDateTime_(s, '12:00', tz);
+  return d ? Utilities.formatDate(d, tz, 'yyyy-MM-dd') : '';
+}
+
+/** Inclusive calendar days from startKey through endKey. */
+function otReviewDateKeysInclusive_(startKey, endKey, tz) {
+  if (!startKey || !endKey || startKey > endKey) return [];
+  const keys = [];
+  var cur = startKey;
+  for (var guard = 0; guard < 21; guard++) {
+    keys.push(cur);
+    if (cur === endKey) break;
+    cur = otAddDaysToDateKey_(cur, 1, tz);
+  }
+  return keys;
+}
+
+/**
+ * Optional fixed peak week (Mandatory OT template week) shown in a second block on Overtime_Review.
+ * Config REVIEW_PEAK_WEEK_START / REVIEW_PEAK_WEEK_END (yyyy-MM-dd); empty start disables.
+ */
+function otReviewPeakWeekConfig_(config, tz) {
+  const startRaw = String(
+    config.REVIEW_PEAK_WEEK_START != null ? config.REVIEW_PEAK_WEEK_START : '2026-09-13'
+  ).trim();
+  const endRaw = String(
+    config.REVIEW_PEAK_WEEK_END != null ? config.REVIEW_PEAK_WEEK_END : '2026-09-19'
+  ).trim();
+  if (/^(off|false|-)$/i.test(startRaw)) return null;
+  const startKey = otNormalizeDayKey_(startRaw, tz);
+  const endKey = otNormalizeDayKey_(endRaw, tz);
+  if (!startKey || !endKey || startKey > endKey) return null;
+  const dateKeys = otReviewDateKeysInclusive_(startKey, endKey, tz);
+  if (!dateKeys.length) return null;
+  return {
+    startKey: startKey,
+    endKey: endKey,
+    dateKeys: dateKeys,
+    label: otDayDisplay_(startKey, tz) + ' \u2013 ' + otDayDisplay_(endKey, tz)
+  };
+}
+
+/** SG × day rows for Overtime_Review from aggregated slot map. */
+function otReviewBuildTableRows_(dateKeys, agg, tz) {
+  const rows = [];
+  (dateKeys || []).forEach(function(dateKey) {
+    OT_APP.REVIEW_SG_ORDER.forEach(function(sg) {
+      const cell = agg[dateKey + '\t' + sg] || { open: 0, filled: 0 };
+      const pct  = cell.open > 0 ? (cell.filled / cell.open) : '';
+      rows.push([sg, otDayDisplay_(dateKey, tz), cell.open, cell.filled, pct]);
+    });
+  });
+  return rows;
+}
+
+/** Config label for mandatory-OT slot skill (Assembled name). */
+function otReviewPeakSkillLabel_(config) {
+  return String(config.REVIEW_PEAK_SKILL || 'OT T1').trim() || 'OT T1';
+}
+
+function otReviewPeakSkillNamePatterns_(config) {
+  const label = otReviewPeakSkillLabel_(config);
+  if (/^(off|false|-)$/i.test(label)) return [];
+  const patterns = [label, 'OT T1', 'OT Tier 1'];
+  const out = {};
+  patterns.forEach(function(p) {
+    const key = String(p || '').trim().toLowerCase();
+    if (key) out[key] = true;
+  });
+  return Object.keys(out);
+}
+
+function otReviewSkillsListFromApiBody_(body) {
+  const list = [];
+  const raw = body && (body.skills || body.data || body);
+  if (!raw) return list;
+  if (Array.isArray(raw)) {
+    raw.forEach(function(row) { if (row) list.push(row); });
+    return list;
+  }
+  if (typeof raw === 'object') {
+    Object.keys(raw).forEach(function(k) {
+      const row = raw[k];
+      if (row && typeof row === 'object') {
+        list.push(Object.assign({ id: row.id || row.skill_id || k }, row));
+      } else {
+        list.push({ id: k, name: row });
+      }
+    });
+  }
+  return list;
+}
+
+function otReviewMatchSkillName_(name, patterns) {
+  const lower = String(name || '').trim().toLowerCase();
+  if (!lower) return false;
+  return patterns.indexOf(lower) >= 0 ||
+    patterns.some(function(p) { return lower.indexOf(p) >= 0 || p.indexOf(lower) >= 0; });
+}
+
+function otReviewPickSkillFromList_(list, patterns) {
+  var picked = { id: '', name: '' };
+  (list || []).forEach(function(skill) {
+    const name = String(skill.name || skill.skill_name || '').trim();
+    if (!otReviewMatchSkillName_(name, patterns)) return;
+    picked.id = String(skill.id || skill.skill_id || skill.external_id || picked.id);
+    picked.name = name || picked.name;
+  });
+  return picked;
+}
+
+function otReviewFetchSkillsCatalog_(sessionHeaders) {
+  const list = [];
+  if (sessionHeaders) {
+    try {
+      const resp = UrlFetchApp.fetch(OT_APP.APP_BASE + '/skills', {
+        method: 'get', headers: sessionHeaders, muteHttpExceptions: true
+      });
+      if (resp.getResponseCode() >= 200 && resp.getResponseCode() < 300) {
+        list.push.apply(list, otReviewSkillsListFromApiBody_(JSON.parse(resp.getContentText() || '{}')));
+      }
+    } catch (err) {
+      otAudit_('REVIEW_PEAK_SKILL', '', 'App /skills: ' + String(err), 'INFO');
+    }
+  }
+  if (!list.length) {
+    try {
+      const headers = otAuthHeaders_(otGetApiKey_());
+      const resp = UrlFetchApp.fetch(OT_APP.API_BASE + '/skills', {
+        method: 'get', headers: headers, muteHttpExceptions: true
+      });
+      if (resp.getResponseCode() >= 200 && resp.getResponseCode() < 300) {
+        list.push.apply(list, otReviewSkillsListFromApiBody_(JSON.parse(resp.getContentText() || '{}')));
+      }
+    } catch (err) {
+      otAudit_('REVIEW_PEAK_SKILL', '', 'API /skills: ' + String(err), 'FAILED');
+    }
+  }
+  return list;
+}
+
+function otReviewFindSkillRowById_(list, id) {
+  const want = String(id || '').trim().toLowerCase();
+  if (!want) return null;
+  for (var i = 0; i < (list || []).length; i++) {
+    const row = list[i];
+    const rid = String(row.id || row.skill_id || '').trim().toLowerCase();
+    if (rid === want) return row;
+  }
+  return null;
+}
+
+/**
+ * Voluntary-time / overtime_slots filter uses ott1-{created_at}, not the v0 UUID.
+ * e.g. OT T1 → ott1-1759507170 (matches app.assembledhq.com/staffing/voluntary-time?skill=…).
+ */
+var OT_REVIEW_OT_T1_VOLUNTARY_PARAM = 'ott1-1759507170';
+var OT_REVIEW_OT_T1_V0_UUID = 'd2b11d4e-b2f5-4f37-bfe8-8d7401cceb1d';
+
+function otReviewIsOtT1SkillName_(name) {
+  return /^ot(\s+t1|\s+tier\s+1)$/i.test(String(name || '').trim().replace(/\s+/g, ' '));
+}
+
+function otReviewAssembledVoluntarySkillParam_(skillRow) {
+  if (!skillRow) return '';
+  const rawId = String(skillRow.id || skillRow.skill_id || '').trim();
+  if (/^ott1-\d+$/.test(rawId)) return rawId;
+  const name = String(skillRow.name || skillRow.skill_name || '').trim();
+  const created = Number(skillRow.created_at || skillRow.createdAt || 0);
+  if (created > 0 && otReviewIsOtT1SkillName_(name)) {
+    return 'ott1-' + Math.floor(created);
+  }
+  if (otReviewIsOtT1SkillName_(name)) return OT_REVIEW_OT_T1_VOLUNTARY_PARAM;
+  if (rawId.toLowerCase() === OT_REVIEW_OT_T1_V0_UUID) return OT_REVIEW_OT_T1_VOLUNTARY_PARAM;
+  return '';
+}
+
+/** Resolve OT T1 skill for peak week (app voluntary-time ?skill=ott1-…). */
+function otReviewResolvePeakSkill_(config, sessionHeaders) {
+  const patterns = otReviewPeakSkillNamePatterns_(config);
+  if (!patterns.length) return null;
+
+  var skillName = otReviewPeakSkillLabel_(config);
+  const configId = String(config.REVIEW_PEAK_SKILL_ID || '').trim();
+  if (/^ott1-\d+$/.test(configId)) {
+    return { appSkillParam: configId, name: skillName, namePatterns: patterns, apiId: '' };
+  }
+  if (configId.toLowerCase() === OT_REVIEW_OT_T1_V0_UUID) {
+    return {
+      appSkillParam: OT_REVIEW_OT_T1_VOLUNTARY_PARAM,
+      name: skillName,
+      namePatterns: patterns,
+      apiId: configId
+    };
+  }
+
+  const catalog = otReviewFetchSkillsCatalog_(sessionHeaders);
+  var picked = configId ? otReviewFindSkillRowById_(catalog, configId) : null;
+  if (!picked || !picked.id) {
+    picked = otReviewPickSkillFromList_(catalog, patterns);
+  }
+  if (picked && picked.name) skillName = picked.name;
+
+  var appSkillParam = otReviewAssembledVoluntarySkillParam_(picked);
+  if (!appSkillParam && /^ott1-\d+$/.test(configId)) appSkillParam = configId;
+
+  return {
+    appSkillParam: appSkillParam,
+    apiId: picked ? String(picked.id || '') : '',
+    name: skillName,
+    namePatterns: patterns
+  };
+}
+
+function otReviewDeepCollectSkillHints_(obj, depth, tok, seen) {
+  if (!obj || depth > 6) return;
+  seen = seen || {};
+  if (typeof obj !== 'object') return;
+  if (seen[obj]) return;
+  seen[obj] = true;
+  const pushId = function(v) {
+    if (v != null && String(v).trim()) tok.ids.push(String(v).trim());
+  };
+  const pushName = function(v) {
+    if (v != null && String(v).trim()) tok.names.push(String(v).trim());
+  };
+  if (Array.isArray(obj)) {
+    obj.forEach(function(item) { otReviewDeepCollectSkillHints_(item, depth + 1, tok, seen); });
+    return;
+  }
+  Object.keys(obj).forEach(function(key) {
+    const lowerKey = key.toLowerCase();
+    const val = obj[key];
+    if (/skill/.test(lowerKey)) {
+      if (typeof val === 'string' || typeof val === 'number') {
+        if (/name|label|title/.test(lowerKey)) pushName(val);
+        else pushId(val);
+      } else if (Array.isArray(val) || (val && typeof val === 'object')) {
+        otReviewDeepCollectSkillHints_(val, depth + 1, tok, seen);
+      }
+    }
+    if (typeof val === 'object') otReviewDeepCollectSkillHints_(val, depth + 1, tok, seen);
+  });
+}
+
+function otReviewEnrichedSlotSkillTokens_(slot, sessionHeaders, cache) {
+  cache = cache || {};
+  const slotId = String(slot.id || slot.slot_id || slot.overtime_slot_id || '').trim();
+  if (slotId && cache[slotId]) return cache[slotId];
+
+  const tok = otReviewSlotSkillTokens_(slot);
+  otReviewDeepCollectSkillHints_(slot, 0, tok, {});
+
+  if (slotId && !tok.ids.length && !tok.names.length) {
+    try {
+      const resp = UrlFetchApp.fetch(
+        OT_APP.APP_BASE + '/overtime_slots/' + encodeURIComponent(slotId),
+        { method: 'get', headers: sessionHeaders, muteHttpExceptions: true }
+      );
+      Utilities.sleep(150);
+      if (resp.getResponseCode() >= 200 && resp.getResponseCode() < 300) {
+        const body = JSON.parse(resp.getContentText() || '{}');
+        const detail = body.overtime_slot || body.slot || body.data || body;
+        const detailTok = otReviewSlotSkillTokens_(detail);
+        detailTok.ids.forEach(function(id) { tok.ids.push(id); });
+        detailTok.names.forEach(function(n) { tok.names.push(n); });
+        otReviewDeepCollectSkillHints_(detail, 0, tok, {});
+      }
+    } catch (err) {
+      /* detail fetch optional */
+    }
+  }
+
+  if (slotId) cache[slotId] = tok;
+  return tok;
+}
+
+function otReviewTokenMatchesPeakSkill_(tok, peakSkill) {
+  if (!peakSkill || !tok) return false;
+  if (peakSkill.id) {
+    for (var i = 0; i < tok.ids.length; i++) {
+      if (tok.ids[i] === String(peakSkill.id)) return true;
+    }
+  }
+  const patterns = peakSkill.namePatterns || [];
+  for (var j = 0; j < tok.names.length; j++) {
+    const lower = String(tok.names[j]).trim().toLowerCase();
+    for (var p = 0; p < patterns.length; p++) {
+      if (lower === patterns[p] || lower.indexOf(patterns[p]) >= 0) return true;
+    }
+  }
+  return false;
+}
+
+function otReviewSlotMatchesPeakSkill_(slot, peakSkill, sessionHeaders, cache) {
+  if (!peakSkill) return false;
+  const tok = sessionHeaders
+    ? otReviewEnrichedSlotSkillTokens_(slot, sessionHeaders, cache)
+    : otReviewSlotSkillTokens_(slot);
+  return otReviewTokenMatchesPeakSkill_(tok, peakSkill);
+}
+
+function otReviewBuildOvertimeSlotsUrl_(qd, fetchStart, windowEndFetch, extraQuery) {
+  var url = OT_APP.APP_BASE + '/overtime_slots'
+    + '?start_time=' + encodeURIComponent(fetchStart.toISOString())
+    + '&end_time='   + encodeURIComponent(windowEndFetch.toISOString())
+    + '&channel=phone'
+    + '&queue='      + encodeURIComponent(qd.queueAppId)
+    + '&is_published=true';
+  if (extraQuery) {
+    Object.keys(extraQuery).forEach(function(k) {
+      const v = extraQuery[k];
+      if (v != null && String(v).trim() !== '') {
+        url += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(String(v));
+      }
+    });
+  }
+  return url;
+}
+
+function otReviewFetchOvertimeSlots_(url, sessionHeaders, queueName) {
+  try {
+    const resp = UrlFetchApp.fetch(url, {
+      method: 'get', headers: sessionHeaders, muteHttpExceptions: true
+    });
+    Utilities.sleep(300);
+    const code = resp.getResponseCode();
+    if (code < 200 || code >= 300) {
+      otAudit_('REVIEW_FETCH', queueName || '', 'HTTP ' + code + ' peak skill filter', 'INFO');
+      return [];
+    }
+    return otReviewDedupeSlotsByWindow_(
+      otCoerceOvertimeSlotsArray_(JSON.parse(resp.getContentText()))
+    );
+  } catch (err) {
+    otAudit_('REVIEW_FETCH', queueName || '', 'Peak fetch: ' + String(err), 'FAILED');
+    return [];
+  }
+}
+
+function otReviewAddToAggMap_(agg, dayKey, sg, counts) {
+  const mapKey = dayKey + '\t' + sg;
+  if (!agg[mapKey]) agg[mapKey] = { open: 0, filled: 0 };
+  agg[mapKey].open   += counts.capacity;
+  agg[mapKey].filled += counts.filled;
+}
+
+/**
+ * Peak week block = same overtime_slots pull as Overtime Review (channel=phone, per queue)
+ * plus voluntary-time skill filter ?skill=ott1-…
+ */
+function otReviewBuildPeakAgg_(peakWeek, peakSkill, sessionHeaders, tz, includePending) {
+  const peakAgg = {};
+  const skillParam = String(peakSkill && peakSkill.appSkillParam || '').trim();
+  if (!skillParam || !peakWeek) return { peakAgg: peakAgg, matched: 0 };
+
+  const peakStart = otBuildDateTime_(peakWeek.startKey, '00:00', tz);
+  const peakEnd = otBuildDateTime_(otAddDaysToDateKey_(peakWeek.endKey, 1, tz), '00:00', tz);
+  if (!peakStart || !peakEnd) return { peakAgg: peakAgg, matched: 0 };
+
+  var matched = 0;
+  OT_APP.QUEUE_DEFS.forEach(function(qd) {
+    const url = otReviewBuildOvertimeSlotsUrl_(qd, peakStart, peakEnd, { skill: skillParam });
+    const slots = otReviewFetchOvertimeSlots_(url, sessionHeaders, qd.name + ' (peak OT T1)');
+    slots.forEach(function(slot) {
+      const slotStart = new Date(slot.start_time || slot.startTime);
+      if (isNaN(slotStart.getTime())) return;
+      const dayKey = Utilities.formatDate(slotStart, tz, 'yyyy-MM-dd');
+      if (!otReviewIsPeakWeekDay_(dayKey, peakWeek)) return;
+      const counts = otReviewSlotOpenFilled_(slot, includePending);
+      if (!counts) return;
+      otReviewAddToAggMap_(peakAgg, dayKey, qd.sg, counts);
+      matched++;
+    });
+  });
+  return { peakAgg: peakAgg, matched: matched };
+}
+
+function otReviewSlotSkillTokens_(slot) {
+  const ids = [];
+  const names = [];
+  const pushId = function(v) {
+    if (v != null && String(v).trim()) ids.push(String(v).trim());
+  };
+  const pushName = function(v) {
+    if (v != null && String(v).trim()) names.push(String(v).trim());
+  };
+  function walk(raw) {
+    if (!raw) return;
+    if (Array.isArray(raw)) {
+      raw.forEach(function(item) {
+        if (item && typeof item === 'object') {
+          pushId(item.id || item.skill_id);
+          pushName(item.name || item.skill_name || item.label);
+        } else {
+          pushId(item);
+        }
+      });
+      return;
+    }
+    if (typeof raw === 'object') {
+      Object.keys(raw).forEach(function(k) {
+        const val = raw[k];
+        if (val && typeof val === 'object') {
+          pushId(val.id || k);
+          pushName(val.name || val.skill_name);
+        } else {
+          pushId(k);
+          pushName(val);
+        }
+      });
+    }
+  }
+  walk(slot.skill_ids);
+  walk(slot.skillIds);
+  walk(slot.skills);
+  pushId(slot.skill_id || slot.skillId);
+  pushName(slot.skill_name || slot.skillName);
+  return { ids: ids, names: names };
+}
+
+function otReviewIsPeakWeekDay_(dayKey, peakWeek) {
+  if (!peakWeek || !dayKey) return false;
+  return peakWeek.dateKeys.indexOf(dayKey) >= 0;
+}
+
+/** Extend Assembled fetch window so optional peak week is always queried. */
+function otReviewExtendFetchWindow_(fetchStart, windowEndFetch, peak, tz) {
+  if (!peak) return { fetchStart: fetchStart, windowEndFetch: windowEndFetch };
+  const peakStart = otBuildDateTime_(peak.startKey, '00:00', tz);
+  const dayAfterPeak = otAddDaysToDateKey_(peak.endKey, 1, tz);
+  const peakEndExclusive = otBuildDateTime_(dayAfterPeak, '00:00', tz);
+  if (peakStart && peakStart.getTime() < fetchStart.getTime()) {
+    fetchStart = new Date(peakStart.getTime());
+  }
+  if (peakEndExclusive && peakEndExclusive.getTime() > windowEndFetch.getTime()) {
+    windowEndFetch = new Date(peakEndExclusive.getTime());
+  }
+  return { fetchStart: fetchStart, windowEndFetch: windowEndFetch };
+}
+
 /** Date keys for the N calendar days before today (excludes today). */
 function otReviewBuildPastDateKeys_(todayStart, tz, lookbackDays) {
   if (!lookbackDays) return [];
@@ -833,7 +1282,11 @@ function otBuildOvertimeReviewAgg_(config, options) {
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
   const fetchStart = new Date(todayStart.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
-  const windowEndFetch = new Date(todayStart.getTime() + fetchDays * 24 * 60 * 60 * 1000);
+  var windowEndFetch = new Date(todayStart.getTime() + fetchDays * 24 * 60 * 60 * 1000);
+  const peakWeek = otReviewPeakWeekConfig_(config, tz);
+  const extended = otReviewExtendFetchWindow_(fetchStart, windowEndFetch, peakWeek, tz);
+  fetchStart.setTime(extended.fetchStart.getTime());
+  windowEndFetch.setTime(extended.windowEndFetch.getTime());
 
   var sessionHeaders;
   try {
@@ -842,10 +1295,11 @@ function otBuildOvertimeReviewAgg_(config, options) {
     return { ok: false, error: String(err) };
   }
 
+  const peakSkill = peakWeek ? otReviewResolvePeakSkill_(config, sessionHeaders) : null;
+
   const agg = {};
-  /** Last N complete days before today: key = dayKey + '\t' + sg + '\t' + hour (0–23). */
+  const peakAgg = {};
   const hourDayAgg = {};
-  /** Same window, all SGs combined: key = dayKey + '\t' + hour. */
   const hourDayAllAgg = {};
   var sessionAlertSent = false;
 
@@ -926,6 +1380,18 @@ function otBuildOvertimeReviewAgg_(config, options) {
     otAudit_('REVIEW_FETCH', qd.name, 'Raw: ' + slots.length + ' slots → aggregated', 'INFO');
   });
 
+  if (peakWeek && peakSkill) {
+    const built = otReviewBuildPeakAgg_(peakWeek, peakSkill, sessionHeaders, tz, includePending);
+    Object.keys(peakAgg).forEach(function(k) { delete peakAgg[k]; });
+    Object.keys(built.peakAgg).forEach(function(k) { peakAgg[k] = built.peakAgg[k]; });
+    otAudit_('REVIEW_PEAK', '',
+      'skill=' + (peakSkill.appSkillParam || 'missing') +
+      ' apiId=' + (peakSkill.apiId || '') +
+      ' name=' + (peakSkill.name || '') +
+      ' | slotRows=' + built.matched,
+      built.matched > 0 ? 'OK' : 'FAILED');
+  }
+
   const pastDateKeys = otReviewBuildPastDateKeys_(todayStart, tz, lookbackDays);
   const forwardDateKeys = otReviewBuildDateKeysAfterBlankStreak_(
     todayStart, tz, fetchDays, agg, blankStreak);
@@ -933,18 +1399,8 @@ function otBuildOvertimeReviewAgg_(config, options) {
   const firstDayKey = dateKeys.length ? dateKeys[0] : '';
   const lastDayKey = dateKeys.length ? dateKeys[dateKeys.length - 1] : '';
 
-  const rows = [];
-  dateKeys.forEach(function(dateKey) {
-    OT_APP.REVIEW_SG_ORDER.forEach(function(sg) {
-      const cell = agg[dateKey + '\t' + sg] || { open: 0, filled: 0 };
-      const pct  = cell.open > 0 ? (cell.filled / cell.open) : '';
-      const dayDt = otBuildDateTime_(dateKey, '12:00', tz);
-      const dayDisplay = dayDt
-        ? Utilities.formatDate(dayDt, tz, 'M/d/yyyy')
-        : dateKey;
-      rows.push([sg, dayDisplay, cell.open, cell.filled, pct]);
-    });
-  });
+  const rows = otReviewBuildTableRows_(dateKeys, agg, tz);
+  const peakRows = peakWeek ? otReviewBuildTableRows_(peakWeek.dateKeys, peakAgg, tz) : [];
 
   const hourLookbackKeys = otHourReportDateKeys_(todayStart, tz, hourLookbackDays, hourLookaheadDays);
 
@@ -952,6 +1408,8 @@ function otBuildOvertimeReviewAgg_(config, options) {
     ok: true,
     tz: tz,
     agg: agg,
+    peakAgg: peakAgg,
+    peakSkill: peakSkill,
     hourDayAgg: hourDayAgg,
     hourDayAllAgg: hourDayAllAgg,
     hourLookbackDays: hourLookbackDays,
@@ -959,6 +1417,8 @@ function otBuildOvertimeReviewAgg_(config, options) {
     hourLookbackKeys: hourLookbackKeys,
     dateKeys: dateKeys,
     rows: rows,
+    peakWeek: peakWeek,
+    peakRows: peakRows,
     fetchDays: fetchDays,
     lookbackDays: lookbackDays,
     blankStreak: blankStreak,
@@ -972,6 +1432,8 @@ function otWriteOvertimeReviewSheet_(result, config) {
   const rows = result.rows || [];
   const dateKeys = result.dateKeys || [];
   const lastDayKey = result.lastDayKey || '';
+  const peakWeek = result.peakWeek || null;
+  const peakRows = result.peakRows || [];
 
   const sheet = otGetOrCreate_(OT_APP.SHEETS.OVERTIME_REVIEW);
   sheet.clear();
@@ -988,23 +1450,50 @@ function otWriteOvertimeReviewSheet_(result, config) {
   sheet.getRange(2, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
 
   const firstData = 3;
+  const cfRules = [];
   if (rows.length) {
     sheet.getRange(firstData, 1, rows.length, 5).setValues(rows);
     sheet.getRange(firstData, 3, rows.length, 2).setNumberFormat('0');
     sheet.getRange(firstData, 5, rows.length, 1).setNumberFormat('0.00%');
+    cfRules.push.apply(cfRules, otBuildOvertimeReviewConditionalFormatRules_(
+      sheet, firstData, firstData + rows.length - 1, 'C', 'D', 'E', 5, 1));
   }
 
-  otApplyOvertimeReviewConditionalFormat_(sheet, firstData, firstData + Math.max(0, rows.length - 1));
-  sheet.setFrozenRows(2);
-  sheet.autoResizeColumns(1, 5);
+  if (peakWeek && peakRows.length) {
+    const peakCol = 7;
+    const peakSkillLabel = otReviewPeakSkillLabel_(config);
+    sheet.getRange(1, peakCol, 1, 5).merge();
+    sheet.getRange(1, peakCol).setValue(
+      'PEAK WEEK (' + peakWeek.label + ') · skill: ' +
+      (result.peakSkill && result.peakSkill.name ? result.peakSkill.name : peakSkillLabel)
+    )
+      .setFontWeight('bold')
+      .setFontSize(14)
+      .setHorizontalAlignment('center')
+      .setBackground('#cfe2f3');
+    sheet.getRange(2, peakCol, 1, 5).setValues([headers]).setFontWeight('bold');
+    sheet.getRange(firstData, peakCol, peakRows.length, 5).setValues(peakRows);
+    sheet.getRange(firstData, peakCol + 2, peakRows.length, 2).setNumberFormat('0');
+    sheet.getRange(firstData, peakCol + 4, peakRows.length, 1).setNumberFormat('0.00%');
+    cfRules.push.apply(cfRules, otBuildOvertimeReviewConditionalFormatRules_(
+      sheet, firstData, firstData + peakRows.length - 1, 'I', 'J', 'K', 5, peakCol));
+  }
+  if (cfRules.length) sheet.setConditionalFormatRules(cfRules);
 
-  otAudit_('REVIEW_REPORT', '',
+  sheet.setFrozenRows(2);
+  sheet.autoResizeColumns(1, peakWeek && peakRows.length ? 11 : 5);
+
+  var auditDetail =
     'Lookback: ' + (result.lookbackDays || 0) + 'd | Fetch ahead: ' + result.fetchDays + 'd' +
     ' | Blank-stop streak: ' + result.blankStreak +
     ' | Table: ' + dateKeys.length + ' day(s) ' +
     (result.firstDayKey ? result.firstDayKey + ' \u2192 ' : '') + lastDayKey +
-    ' | Rows: ' + rows.length,
-    'OK');
+    ' | Rows: ' + rows.length;
+  if (peakWeek && peakRows.length) {
+    auditDetail += ' | Peak week: ' + peakWeek.startKey + ' \u2192 ' + peakWeek.endKey +
+      ' (' + peakRows.length + ' rows, cols G–K)';
+  }
+  otAudit_('REVIEW_REPORT', '', auditDetail, 'OK');
 }
 
 /**
@@ -1160,6 +1649,10 @@ function runOvertimeReviewReport(options) {
         ' day(s) ' + (result.firstDayKey || '') +
         (result.firstDayKey && result.lastDayKey ? ' → ' : '') +
         (result.lastDayKey || '') + ').\n\n' +
+        (result.peakWeek && result.peakRows && result.peakRows.length
+          ? 'Peak week (' + result.peakWeek.label + '): columns G–K on the same tab (' +
+            result.peakRows.length + ' rows).\n\n'
+          : '') +
         'OT take rate by hour: “' + OT_APP.SHEETS.OT_BY_HOUR + '” (' +
         (result.hourLookbackDays || 7) + ' past days + today +' +
         (result.hourLookaheadDays || 7) + ' ahead, per SG/day/hour).'
@@ -1170,52 +1663,55 @@ function runOvertimeReviewReport(options) {
 }
 
 /**
- * Row colors by % filled (pctCol): gray = no slots; red <50%; orange 50–70%;
- * yellow 71–83%; green >83% up to 100%.
+ * Row colors by % filled (pctCol): grey = no open slots; green ≥85%; yellow ≥70%;
+ * orange ≥55%; red &lt;55%.
  * @returns {GoogleAppsScript.Spreadsheet.ConditionalFormatRule[]}
  */
-function otBuildOvertimeReviewConditionalFormatRules_(sheet, startRow, endRow, openCol, filledCol, pctCol, width) {
+function otBuildOvertimeReviewConditionalFormatRules_(
+  sheet, startRow, endRow, openCol, filledCol, pctCol, width, startCol) {
   if (endRow < startRow) return [];
   openCol = openCol || 'C';
   filledCol = filledCol || 'D';
   pctCol = pctCol || 'E';
   width = width || 5;
+  startCol = startCol || 1;
   const numRows = endRow - startRow + 1;
-  const all = sheet.getRange(startRow, 1, numRows, width);
+  const all = sheet.getRange(startRow, startCol, numRows, width);
   const p = 'INDIRECT("' + pctCol + '"&ROW())';
   const o = 'INDIRECT("' + openCol + '"&ROW())';
+  const f = 'INDIRECT("' + filledCol + '"&ROW())';
   const rules = [];
 
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND(' + o + '=0,' + 'INDIRECT("' + filledCol + '"&ROW())=0)')
+    .whenFormulaSatisfied('=AND(' + o + '=0,' + f + '=0)')
     .setBackground('#d9d9d9')
     .setFontColor('#666666')
     .setRanges([all])
     .build());
 
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND(' + o + '>0,' + p + '>0.83,' + p + '<=1)')
+    .whenFormulaSatisfied('=AND(' + o + '>0,' + p + '>=0.85,' + p + '<=1)')
     .setBackground('#c6efce')
     .setFontColor('#006100')
     .setRanges([all])
     .build());
 
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND(' + o + '>0,' + p + '>0.7,' + p + '<=0.83)')
+    .whenFormulaSatisfied('=AND(' + o + '>0,' + p + '>=0.7,' + p + '<0.85)')
     .setBackground('#fff2cc')
     .setFontColor('#7f6000')
     .setRanges([all])
     .build());
 
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND(' + o + '>0,' + p + '>=0.5,' + p + '<=0.7)')
+    .whenFormulaSatisfied('=AND(' + o + '>0,' + p + '>=0.55,' + p + '<0.7)')
     .setBackground('#fce4d6')
     .setFontColor('#c65911')
     .setRanges([all])
     .build());
 
   rules.push(SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND(' + o + '>0,' + p + '<0.5)')
+    .whenFormulaSatisfied('=AND(' + o + '>0,' + p + '<0.55)')
     .setBackground('#ffc7ce')
     .setFontColor('#9c0006')
     .setRanges([all])
@@ -1224,9 +1720,10 @@ function otBuildOvertimeReviewConditionalFormatRules_(sheet, startRow, endRow, o
   return rules;
 }
 
-function otApplyOvertimeReviewConditionalFormat_(sheet, startRow, endRow, openCol, filledCol, pctCol, width) {
+function otApplyOvertimeReviewConditionalFormat_(
+  sheet, startRow, endRow, openCol, filledCol, pctCol, width, startCol) {
   const rules = otBuildOvertimeReviewConditionalFormatRules_(
-    sheet, startRow, endRow, openCol, filledCol, pctCol, width);
+    sheet, startRow, endRow, openCol, filledCol, pctCol, width, startCol);
   if (rules.length) sheet.setConditionalFormatRules(rules);
 }
 
@@ -2722,6 +3219,11 @@ function runOtDashboardReport() {
 function runOvertimeReviewAndDashboard_() {
   runOvertimeReviewReport();
   runOtDashboardReport();
+}
+
+/** Apps Script editor / automation — no Spreadsheet UI alerts. */
+function runOvertimeReviewReportHeadless_() {
+  return runOvertimeReviewReport({ headless: true });
 }
 
 /*************************************************************
@@ -4395,6 +4897,10 @@ function setupOtWorkbook() {
       ['REVIEW_FETCH_DAYS',             0,                 'Overtime_Review: days ahead to query Assembled; 0 = auto max(REPORT_DAYS, LOOKAHEAD_DAYS, 21), max 60'],
       ['REVIEW_BLANK_STOP_STREAK',      3,                 'Overtime_Review: stop the table before this many consecutive days with no open seats in any queue (2–10)'],
       ['REVIEW_FILLED_INCLUDES_PENDING', 'TRUE',         'Overtime_Review: Filled = approved + pending when TRUE; approved only when FALSE'],
+      ['REVIEW_PEAK_WEEK_START',        '2026-09-13',    'Overtime_Review: peak week Sun (yyyy-MM-dd); OFF = no peak block'],
+      ['REVIEW_PEAK_WEEK_END',          '2026-09-19',    'Overtime_Review: peak week Sat (yyyy-MM-dd); must be >= START'],
+      ['REVIEW_PEAK_SKILL',             'OT T1',         'Peak week block (G–K): Assembled skill name (voluntary-time filter)'],
+      ['REVIEW_PEAK_SKILL_ID',          '',              'Optional override: ott1-1759507170 (NOT the v0 UUID — UUID returns invalid skill)'],
       ['REVIEW_HOUR_LOOKBACK_DAYS',     7,                 'OT_By_Hour: complete days before today (1–30)'],
       ['REVIEW_HOUR_LOOKAHEAD_DAYS',    7,                 'OT_By_Hour: days ahead from today inclusive (0–30; 7 = through today+7)'],
       ['MANAGER_CHANNEL_SLACK',         'FALSE',           'Post OT Take Pulse digests to Sales Manager Slack channel'],
@@ -4468,6 +4974,31 @@ function setupOtWorkbook() {
   }
 
   otFormatSheets_();
+  otEnsureChangelogEntry_(
+    'v1.3.12',
+    'Peak week: map OT T1 v0 skill UUID to voluntary-time param ott1-{created_at}; ' +
+    'peak pull = overtime_slots + channel=phone + skill=ott1-… (validated locally).'
+  );
+  otEnsureChangelogEntry_(
+    'v1.3.11',
+    'Peak week pull uses Assembled voluntary-time skill param (?skill=ott1-…) via session /skills lookup; ' +
+    'default REVIEW_PEAK_SKILL=OT T1; optional REVIEW_PEAK_SKILL_ID override.'
+  );
+  otEnsureChangelogEntry_(
+    'v1.3.10',
+    'Peak week Overtime_Review: resolve OT Tier 1 / OT T1 skill id, fetch peak window with skill query params, ' +
+    'enrich slot detail when list payloads omit skills, audit REVIEW_PEAK row counts.'
+  );
+  otEnsureChangelogEntry_(
+    'v1.3.9',
+    'Peak week Overtime_Review (G–K) counts only REVIEW_PEAK_SKILL slots (default OT Tier 1). ' +
+    'Fix % row colors (≥85 green, ≥70 yellow, ≥55 orange, &lt;55 red, 0 grey) and apply main + peak rules together.'
+  );
+  otEnsureChangelogEntry_(
+    'v1.3.8',
+    'Refresh Overtime Review extends the Assembled pull through REVIEW_PEAK_WEEK (default 2026-09-13 \u2192 2026-09-19) ' +
+    'and writes a PEAK WEEK table in columns G\u2013K on Overtime_Review. Set Config REVIEW_PEAK_WEEK_START to OFF to disable.'
+  );
   otEnsureChangelogEntry_(
     'v1.3.7',
     'Bulk OT Slack pings (by SG menu) use the same schedule gate as targeted offers: ' +
