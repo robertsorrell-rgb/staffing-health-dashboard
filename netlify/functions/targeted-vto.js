@@ -10,6 +10,22 @@ const { env } = require('./lib/deploy-defaults.js');
 
 const CACHE_SEC = parseInt(env('TARGETED_VTO_CACHE_SECONDS'), 10);
 
+async function fetchNerdDeskTargetedRollup() {
+  const url = String(env('NERDDESK_TARGETED_VTO_ROLLUP_URL') || '').trim();
+  const key = String(env('STAFFING_HEALTH_VTO_ROLLUP_KEY') || env('TARGETED_VTO_ROLLUP_KEY') || '').trim();
+  if (!url || !key) {
+    return { error: 'NERDDESK_TARGETED_VTO_ROLLUP_URL and STAFFING_HEALTH_VTO_ROLLUP_KEY required' };
+  }
+  const sep = url.includes('?') ? '&' : '?';
+  const full = `${url}${sep}key=${encodeURIComponent(key)}`;
+  const res = await fetch(full, { headers: { Accept: 'application/json' } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { error: data.error || res.statusText || `HTTP ${res.status}` };
+  }
+  return { data };
+}
+
 exports.handler = async (event) => {
   const pre = handleOptions(event);
   if (pre) return pre;
@@ -30,27 +46,47 @@ exports.handler = async (event) => {
     );
   }
 
+  const targetedSource = String(env('TARGETED_VTO_SOURCE') || 'sheet').trim().toLowerCase();
+  const useNerdDeskTargeted = targetedSource === 'nerddesk' || targetedSource === 'both';
+  const useSheetTargeted = targetedSource === 'sheet' || targetedSource === 'both';
+
   let today = todayCTDateStr();
   let rollup = emptyTargetedRollup();
   let targetedRowsToday = 0;
   let targetedFetchError = null;
+  let nerdDeskMeta = null;
   let auto = emptyAutoRollup();
   let autoRowsToday = 0;
   let autoDateColumnUsed = null;
   let autoFetchError = null;
 
-  if (targetedSpreadsheetId) {
+  if (useNerdDeskTargeted) {
+    const nd = await fetchNerdDeskTargetedRollup();
+    if (nd.error) {
+      targetedFetchError = nd.error;
+      if (targetedSource === 'nerddesk') rollup = emptyTargetedRollup();
+    } else {
+      nerdDeskMeta = nd.data;
+      today = nd.data.today || today;
+      rollup = nd.data.rollup || emptyTargetedRollup();
+      targetedRowsToday = rollup.committed_offers_today + rollup.offers_other_status_today;
+    }
+  }
+
+  if (useSheetTargeted && targetedSpreadsheetId) {
     try {
       const r = await readSheetFilterToday(targetedSpreadsheetId, offersTab, 'A1:ZZ20000', {
         preferDateHeaders: ['Date', 'date'],
       });
-      today = r.today;
-      targetedRowsToday = r.rowsToday.length;
-      rollup =
-        r.headers.length && r.rowsToday.length ? rollupTargetedOffers(r.rowsToday, r.headers) : emptyTargetedRollup();
+      if (!useNerdDeskTargeted || targetedSource === 'both') {
+        today = r.today;
+        targetedRowsToday = r.rowsToday.length;
+        rollup =
+          r.headers.length && r.rowsToday.length ? rollupTargetedOffers(r.rowsToday, r.headers) : emptyTargetedRollup();
+      }
     } catch (err) {
-      targetedFetchError = err.message || String(err);
-      rollup = emptyTargetedRollup();
+      if (!useNerdDeskTargeted) targetedFetchError = err.message || String(err);
+      rollup = useNerdDeskTargeted && nerdDeskMeta?.rollup ? nerdDeskMeta.rollup : emptyTargetedRollup();
     }
   }
 

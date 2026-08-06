@@ -36,6 +36,9 @@ const DEFAULTS = {
   TARGETED_VTO_SPREADSHEET_ID: '1znBYs9PemirPw_is3b8Blj74wEz7Hb6iGH88DH2qWmU',
   TARGETED_VTO_TAB: 'Offers',
   TARGETED_VTO_CACHE_SECONDS: '300',
+  /** nerddesk | sheet | both — targeted offer hours for dashboard */
+  TARGETED_VTO_SOURCE: 'sheet',
+  NERDDESK_TARGETED_VTO_ROLLUP_URL: 'https://nerddesk.netlify.app/api/targeted-vto?view=staffing_health_rollup',
   AUTO_VTO_SPREADSHEET_ID: '1gU2f7IQdlpWojwWnsQbpRP1Vge79I0tr4n1AjI1K3uw',
   AUTO_VTO_TAB: 'Requests_Submissions',
   AUTO_VTO_CACHE_SECONDS: '300',
