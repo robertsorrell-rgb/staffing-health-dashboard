@@ -1,11 +1,47 @@
 /*************************************************************
- * TARGETED VTO BOT v1.11.3
+ * TARGETED VTO BOT v1.11.10
  * Mirrors the VTO engine pattern exactly:
  *   1. Poll Assembled net staffing
  *   2. Find surplus windows (net >= threshold) — VTO opportunity
  *   3. Match eligible reps (right queue + scheduled + not on no-fly)
  *   4. Send offer via email and/or Slack DM (Accept / Decline links)
  *   5. doGet handles response -> writes VTO activity to Assembled
+ *
+ * CHANGELOG v1.11.10
+ *   - NEW: Setting Offers tab Status (column N) to EXPIRED manually invalidates Accept/Decline
+ *     links immediately — onEdit stamps Expires At, Response Time/Action, and Audit. Status
+ *     dropdown on Offers includes EXPIRED.
+ *
+ * CHANGELOG v1.11.9
+ *   - FIX: Intraday surplus merge gated on site aggregate net >= 0 even when MIN_SURPLUS
+ *     was negative (e.g. -2 / -3). That ignored Config and dropped all Elementary-style
+ *     “thin buffer” intervals — Run Now logged “No surplus windows found”. Gate now uses
+ *     the same per-queue effective MIN_SURPLUS as interval thresholding.
+ *
+ * CHANGELOG v1.11.8
+ *   - NEW: Single-day menu when INDIVIDUAL_DAY_VTO_TARGET_DATE is today uses the intraday
+ *     engine (Run Now path): partial windows / early dismissal via rvtoGetRepOfferWindow_(),
+ *     not full-shift week-block offers. Config SINGLE_DAY_INTRADAY_FOR_TODAY (default TRUE).
+ *   - REFACTOR: rvtoRunIntradayEngine_() shared by runReverseVto() and single-day-today menu.
+ *
+ * CHANGELOG v1.11.7
+ *   - FIX: Offers tab row-1 header corruption — doGet resolves standard headers when A1 !==
+ *     "Offer ID" and finds offers by column A (Offer ID) so Accept/Decline links work again.
+ *
+ * CHANGELOG v1.11.6
+ *   - FIX: Week-block headroom gate no longer rejects reps on intervals that cannot absorb
+ *     one departure (net < headroomFloor + 1). With MIN_SURPLUS=-3, edge intervals like +0.5
+ *     at shift end were in the map and blocked every candidate (15 passed / 15 skipped).
+ *
+ * CHANGELOG v1.11.5
+ *   - FIX: Roster Work Group abbreviations (COLLEGE, HIGHSCH, ELD, ADLTL, PROFCERT) now match
+ *     Consumer Sales queue patterns — week-block/single-day runs were queueMismatch=100% when
+ *     the Roster tab used Paylocity/ops shorthand instead of Assembled test-group labels.
+ *
+ * CHANGELOG v1.11.4
+ *   - FIX: Roster tab with blank/space first-column header (or legacy Name|Manager|Work Group
+ *     without Email) no longer yields zero eligible reps. rvtoRosterNameFromHeaders_ +
+ *     legacy column fallback in rvtoGetRoster_().
  *
  * CHANGELOG v1.11.3
  *   - FIX: Week/bundle headroom pre-deducted active WEEK_VTO offers on every surplus
@@ -548,7 +584,7 @@
  * CONSTANTS
  *************************************************************/
 const RVTO_APP = {
-  VERSION: 'V1.11.3',
+  VERSION: 'V1.11.10',
   BASE_URL: 'https://api.assembledhq.com/v0',
 
   SHEETS: {
@@ -578,25 +614,25 @@ const RVTO_APP = {
     {
       name:             'Adult Learner_CC90_New',
       site:             'consumer_sales',
-      workGroupPattern: 'Core Test Group|Languages Test Group',
+      workGroupPattern: 'Core Test Group|Languages Test Group|ADLTL',
       key:              'Adult_Learner_CC90_New'
     },
     {
       name:             'Prof Certs_CC90_New',
       site:             'consumer_sales',
-      workGroupPattern: 'Professional Certifications',
+      workGroupPattern: 'Professional Certifications|PROFCERT',
       key:              'Prof_Certs_CC90_New'
     },
     {
       name:             'College and Grad TP_CC90_New',
       site:             'consumer_sales',
-      workGroupPattern: 'STEM College Test Group|Graduate Test Prep|Col-STEM|College and Grad',
+      workGroupPattern: 'STEM College Test Group|Graduate Test Prep|Col-STEM|College and Grad|COLLEGE',
       key:              'College_and_Grad_TP_CC90_New'
     },
     {
       name:             'Elementary and LD_CC90_New',
       site:             'consumer_sales',
-      workGroupPattern: 'K-6 Test Group|Learning Differences Test Group',
+      workGroupPattern: 'K-6 Test Group|Learning Differences Test Group|ELD',
       key:              'Elementary_and_LD_CC90_New'
     },
     {
@@ -608,7 +644,7 @@ const RVTO_APP = {
     {
       name:             'High School_CC90_New',
       site:             'consumer_sales',
-      workGroupPattern: 'STEM High School Test Group|K12 Test Prep',
+      workGroupPattern: 'STEM High School Test Group|K12 Test Prep|HIGHSCH',
       key:              'High_School_CC90_New'
     }
   ],
@@ -644,9 +680,16 @@ function onOpen() {
     .addSeparator()
     .addItem('Setup Workbook', 'setupRvtoWorkbook')
     .addItem('Install offer alert trigger', 'rvtoInstallOfferAlertTrigger_')
+    .addItem('Refresh Offers status dropdown', 'rvtoApplyOffersStatusValidationMenu_')
     .addItem('Sync Changelog', 'syncRvtoChangelogMenu')
     .addItem('Cleanup Legacy Tabs', 'cleanupLegacyTabs')
     .addToUi();
+}
+
+/** Menu: apply Status dropdown (includes EXPIRED) on Offers column N. */
+function rvtoApplyOffersStatusValidationMenu_() {
+  rvtoApplyOffersStatusValidation_();
+  SpreadsheetApp.getUi().alert('Offers Status column updated — choose EXPIRED to disable Accept/Decline links for that row.');
 }
 
 /** Menu: append any script changelog versions missing from the Changelog tab. */
@@ -696,8 +739,6 @@ function runReverseVto() {
     return;
   }
 
-  // STANDARD_VTO_ENABLED defaults TRUE so existing deployments are unaffected
-  // if the config row hasn't been added yet via Setup Workbook.
   const standardEnabled = rvtoConfigBool_(config.STANDARD_VTO_ENABLED, true);
 
   if (!standardEnabled) {
@@ -705,8 +746,8 @@ function runReverseVto() {
     return;
   }
 
-  const rules  = rvtoGetRules_(config);
-  const ctx    = rvtoBuildContext_(config, rules);
+  const rules = rvtoGetRules_(config);
+  const ctx   = rvtoBuildContext_(config, rules);
 
   ctx.enabledQueues = rvtoGetEnabledQueues_(config);
 
@@ -715,11 +756,31 @@ function runReverseVto() {
     return;
   }
 
-  const deficits  = rvtoFindDeficits_(ctx);
+  rvtoRunIntradayEngine_(ctx, { auditRunType: 'RUN' });
+}
+
+/**
+ * Intraday VTO: surplus windows → per-rep clipped offer windows (early dismissal when shift started).
+ * opts.onlyDateStr — if set, only deficits on that yyyy-MM-dd (Chicago) calendar day.
+ * opts.auditRunType — Audit prefix (RUN, SINGLE_DAY_INTRADAY).
+ */
+function rvtoRunIntradayEngine_(ctx, opts) {
+  opts = opts || {};
+  const auditRunType = opts.auditRunType || 'RUN';
+  const onlyDateStr  = opts.onlyDateStr ? String(opts.onlyDateStr).trim() : '';
+
+  const config = ctx.config;
+  const rules  = ctx.rules;
+
+  var deficits = rvtoFindDeficits_(ctx);
+  if (onlyDateStr) {
+    deficits = deficits.filter(function(d) { return String(d.date || '').trim() === onlyDateStr; });
+    rvtoAudit_(auditRunType, '', 'Filtered to single day ' + onlyDateStr + ' | Surpluses: ' + deficits.length, 'INFO');
+  }
 
   if (!deficits.length) {
-    rvtoAudit_('RUN', '', 'No surplus windows found', 'OK');
-    return;
+    rvtoAudit_(auditRunType, '', 'No surplus windows found', 'OK');
+    return { offers: 0, sent: 0 };
   }
 
   const roster    = rvtoGetRoster_(ctx);
@@ -739,7 +800,7 @@ function runReverseVto() {
     const seatsAvailable = Math.max(0, deficit.headsNeeded - reservedSeats);
 
     if (!seatsAvailable) {
-      rvtoAudit_('RUN', deficit.deficitId,
+      rvtoAudit_(auditRunType, deficit.deficitId,
         'Skipped — all seats reserved. Reserved: ' + reservedSeats + ' / Needed: ' + deficit.headsNeeded,
         'OK');
       return;
@@ -757,7 +818,7 @@ function runReverseVto() {
         new Date(), rules.MIN_BLOCK_MINUTES
       );
       if (!offerWindow) {
-        rvtoAudit_('RUN', deficit.deficitId,
+        rvtoAudit_(auditRunType, deficit.deficitId,
           'Skipped offer for ' + person.email + ' — remaining window too short after clipping to now', 'OK');
         return;
       }
@@ -865,12 +926,14 @@ function runReverseVto() {
     });
   });
 
-  rvtoAudit_('RUN', '',
+  rvtoAudit_(auditRunType, '',
     'Queues active: ' + ctx.enabledQueues.length +
     ' | Surpluses: ' + deficits.length +
     ' | Offers: ' + totalOffers +
     ' | Sent: ' + totalSent,
     'OK');
+
+  return { offers: totalOffers, sent: totalSent };
 }
 
 function expireRvtoOffersMenu() {
@@ -940,6 +1003,37 @@ function runWeekBlockVto() {
   const modeLabel = dates.individualDay
     ? 'SINGLE_DAY'
     : (dates.campaignMode === 'WEEK_BLOCK' ? 'WEEK_BLOCK' : ('BUNDLE ' + dates.campaignMode));
+
+  // v1.11.8: Today's single-day campaign uses intraday engine (partial / early-out windows).
+  if (
+    dates.individualDay &&
+    rvtoConfigBool_(config.SINGLE_DAY_INTRADAY_FOR_TODAY, true)
+  ) {
+    const todayStr = Utilities.formatDate(new Date(), ctx.timezone, 'yyyy-MM-dd');
+    if (dates.startDateStr === todayStr) {
+      expireRvtoOffers_();
+      if (!rvtoCheckQuota_(config)) {
+        return;
+      }
+      rvtoAudit_('SINGLE_DAY_INTRADAY', '',
+        'Starting intraday single-day run for ' + todayStr +
+        ' (early dismissal / clipped windows) | Queues: ' + ctx.enabledQueues.length,
+        'INFO');
+      const intradayResult = rvtoRunIntradayEngine_(ctx, {
+        onlyDateStr:  todayStr,
+        auditRunType: 'SINGLE_DAY_INTRADAY'
+      });
+      SpreadsheetApp.getUi().alert([
+        'Single-day intraday VTO run complete (today).',
+        'Uses partial shift windows / early dismissal — not full-shift week-block offers.',
+        'Date: ' + todayStr,
+        'Offers: ' + (intradayResult.offers || 0),
+        'Sent: ' + (intradayResult.sent || 0)
+      ].join('\n'));
+      return;
+    }
+  }
+
   rvtoAudit_('WEEK_BLOCK_RUN', '',
     'Starting week VTO run [' + modeLabel + ']: ' + dates.startDateStr + ' to ' + dates.endDateStr +
     ' | Days: ' + dates.dateList.length +
@@ -2190,6 +2284,9 @@ function rvtoRepCanFitInHeadroom_(email, schedIdx, headroomMap, minSurplus, queu
       var oStart = Math.max(block.start.getTime(), entry.start.getTime());
       var oEnd   = Math.min(block.end.getTime(),   entry.end.getTime());
       if (oEnd > oStart) {
+        // Interval cannot absorb one VTO headcount without violating floor — ignore for gate
+        // (common when MIN_SURPLUS is negative and +0.5 end-of-day slots enter the map).
+        if (entry.net < floor + 1) continue;
         hasOverlap = true;
         if ((entry.net - 1) < floor) {
           if (queueName) {
@@ -2677,72 +2774,71 @@ function rvtoProcessWeekBlockResponse_(offerId, action, token) {
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) return { ok: false, message: 'No offers found.' };
 
-  const headers = values[0];
+  const headers = rvtoResolveOffersHeaders_(values[0]);
   const now     = new Date();
   const config  = rvtoGetConfig_();
 
-  for (var i = 1; i < values.length; i++) {
-    const obj = rvtoRowToObj_(headers, values[i]);
-    if (String(obj['Offer ID'] || '').trim() !== offerId) continue;
-    if (String(obj['Token']    || '').trim() !== token)   return { ok: false, message: 'Invalid token.' };
+  const rowIdx = rvtoFindOfferSheetRowIndex_(values, offerId);
+  if (rowIdx === -1) return { ok: false, message: 'Offer not found.' };
 
-    const status = String(obj['Status'] || '').trim().toUpperCase();
+  const obj = rvtoRowToObj_(headers, values[rowIdx]);
+  if (String(obj['Token'] || '').trim() !== token) return { ok: false, message: 'Invalid token.' };
 
-    if ([RVTO_APP.OFFER_STATUSES.DECLINED, RVTO_APP.OFFER_STATUSES.EXPIRED].indexOf(status) !== -1) {
-      return { ok: false, message: 'This offer is no longer active.' };
-    }
-    if (status === RVTO_APP.OFFER_STATUSES.COMMITTED) {
-      return { ok: true, message: 'You have already accepted this offer — it has been recorded.' };
-    }
+  const status = String(obj['Status'] || '').trim().toUpperCase();
 
-    const sentAt       = obj['Sent At']    ? new Date(obj['Sent At'])    : null;
-    const expiresAtRaw = obj['Expires At'] ? new Date(obj['Expires At']) : null;
-    const holdHours    = Number(obj['Hold Hours'] || 1);
-    const effectiveExpiry = (expiresAtRaw && !isNaN(expiresAtRaw.getTime()))
-      ? expiresAtRaw : (sentAt ? rvtoAddHours_(sentAt, holdHours) : null);
-
-    if (effectiveExpiry && now >= effectiveExpiry) {
-      rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.EXPIRED);
-      rvtoUpdateOfferField_(offerId, 'Response Time',   now);
-      rvtoUpdateOfferField_(offerId, 'Response Action', 'expired_before_response');
-      return { ok: false, message: 'This offer has expired.' };
-    }
-
-    if (action === 'accept') {
-      if (status !== RVTO_APP.OFFER_STATUSES.ACCEPTED) {
-        rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.ACCEPTED);
-        rvtoUpdateOfferField_(offerId, 'Response Time',   now);
-        rvtoUpdateOfferField_(offerId, 'Response Action', 'accept');
-        rvtoAudit_('WEEK_BLOCK_ACCEPTED', offerId, 'Accepted by ' + obj['Email'], 'OK');
-      }
-
-      const commitEnabled = rvtoConfigBool_(config.ASSEMBLED_COMMIT, true);
-      if (commitEnabled) {
-        var commitResult;
-        try {
-          commitResult = rvtoCommitWeekBlockToAssembled_(offerId, obj, config);
-        } catch (err) {
-          rvtoAudit_('WEEK_BLOCK_COMMIT', offerId, 'Unhandled exception: ' + String(err), 'FAILED');
-          return { ok: false, message: 'Your acceptance was recorded but could not be written to Assembled.' };
-        }
-        return commitResult.ok
-          ? { ok: true,  message: 'Thanks! Your full week VTO has been accepted and recorded in the schedule.' }
-          : { ok: false, message: 'Your acceptance was recorded but could not be fully written to Assembled. Scheduling will follow up.' };
-      }
-      return { ok: true, message: 'Thanks! Your full week VTO has been recorded.' };
-    }
-
-    if (action === 'decline') {
-      rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.DECLINED);
-      rvtoUpdateOfferField_(offerId, 'Response Time',   now);
-      rvtoUpdateOfferField_(offerId, 'Response Action', 'decline');
-      rvtoAudit_('WEEK_BLOCK_DECLINED', offerId, 'Declined by ' + obj['Email'], 'OK');
-      return { ok: true, message: 'Got it — you have declined this offer.' };
-    }
-
-    return { ok: false, message: 'Invalid action.' };
+  if ([RVTO_APP.OFFER_STATUSES.DECLINED, RVTO_APP.OFFER_STATUSES.EXPIRED].indexOf(status) !== -1) {
+    return { ok: false, message: 'This offer is no longer active.' };
   }
-  return { ok: false, message: 'Offer not found.' };
+  if (status === RVTO_APP.OFFER_STATUSES.COMMITTED) {
+    return { ok: true, message: 'You have already accepted this offer — it has been recorded.' };
+  }
+
+  const sentAt       = obj['Sent At']    ? new Date(obj['Sent At'])    : null;
+  const expiresAtRaw = obj['Expires At'] ? new Date(obj['Expires At']) : null;
+  const holdHours    = Number(obj['Hold Hours'] || 1);
+  const effectiveExpiry = (expiresAtRaw && !isNaN(expiresAtRaw.getTime()))
+    ? expiresAtRaw : (sentAt ? rvtoAddHours_(sentAt, holdHours) : null);
+
+  if (effectiveExpiry && now >= effectiveExpiry) {
+    rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.EXPIRED);
+    rvtoUpdateOfferField_(offerId, 'Response Time',   now);
+    rvtoUpdateOfferField_(offerId, 'Response Action', 'expired_before_response');
+    return { ok: false, message: 'This offer has expired.' };
+  }
+
+  if (action === 'accept') {
+    if (status !== RVTO_APP.OFFER_STATUSES.ACCEPTED) {
+      rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.ACCEPTED);
+      rvtoUpdateOfferField_(offerId, 'Response Time',   now);
+      rvtoUpdateOfferField_(offerId, 'Response Action', 'accept');
+      rvtoAudit_('WEEK_BLOCK_ACCEPTED', offerId, 'Accepted by ' + obj['Email'], 'OK');
+    }
+
+    const commitEnabled = rvtoConfigBool_(config.ASSEMBLED_COMMIT, true);
+    if (commitEnabled) {
+      var commitResult;
+      try {
+        commitResult = rvtoCommitWeekBlockToAssembled_(offerId, obj, config);
+      } catch (err) {
+        rvtoAudit_('WEEK_BLOCK_COMMIT', offerId, 'Unhandled exception: ' + String(err), 'FAILED');
+        return { ok: false, message: 'Your acceptance was recorded but could not be written to Assembled.' };
+      }
+      return commitResult.ok
+        ? { ok: true,  message: 'Thanks! Your full week VTO has been accepted and recorded in the schedule.' }
+        : { ok: false, message: 'Your acceptance was recorded but could not be fully written to Assembled. Scheduling will follow up.' };
+    }
+    return { ok: true, message: 'Thanks! Your full week VTO has been recorded.' };
+  }
+
+  if (action === 'decline') {
+    rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.DECLINED);
+    rvtoUpdateOfferField_(offerId, 'Response Time',   now);
+    rvtoUpdateOfferField_(offerId, 'Response Action', 'decline');
+    rvtoAudit_('WEEK_BLOCK_DECLINED', offerId, 'Declined by ' + obj['Email'], 'OK');
+    return { ok: true, message: 'Got it — you have declined this offer.' };
+  }
+
+  return { ok: false, message: 'Invalid action.' };
 }
 
 /*************************************************************
@@ -2858,8 +2954,9 @@ function setupRvtoWorkbook() {
       ['WEEK_VTO_MAX_SENDS_PER_QUEUE',  '',                'Week / bundle menu: max emails per queue in one run (blank or 0 = unlimited). Stops after N successful sends per queue so one surplus day does not offer every eligible rep in that queue.'],
       ['MANAGER_VTO_SLACK',             'TRUE',            'True = Slack the manager when someone accepts (needs SLACK_BOT_TOKEN in Script Properties).'],
       ['STANDARD_VTO_ENABLED',          'TRUE',            'False = turn off the timed intraday run only. Manual week / bundle / single-day menu still works.'],
-      ['INDIVIDUAL_DAY_VTO_ENABLED',    'FALSE',           'True = menu run targets one day only (INDIVIDUAL_DAY_VTO_TARGET_DATE). Pulls Assembled for that day; same offer flow as week-block. Takes precedence over WEEK_VTO_* dates/mode when TRUE.'],
+      ['INDIVIDUAL_DAY_VTO_ENABLED',    'FALSE',           'True = menu run targets one day only (INDIVIDUAL_DAY_VTO_TARGET_DATE). When that date is today and SINGLE_DAY_INTRADAY_FOR_TODAY is TRUE, uses intraday (early dismissal) instead of week-block full shifts. Future dates still use week-block.'],
       ['INDIVIDUAL_DAY_VTO_TARGET_DATE', '',               'Single day to target (yyyy-MM-dd). Required when INDIVIDUAL_DAY_VTO_ENABLED is TRUE.'],
+      ['SINGLE_DAY_INTRADAY_FOR_TODAY', 'TRUE',            'When TRUE and single-day target is today, menu run uses Run Now intraday engine (partial windows). FALSE = always week-block full-shift offers for single-day menu.'],
       ['WEEK_VTO_ENABLED',              'FALSE',           'True = you can run the week / bundle campaign from the menu (unless you use individual-day only).'],
       ['WEEK_VTO_CAMPAIGN_MODE',        'WEEK_BLOCK',      'WEEK_BLOCK = one email for the whole date range. PICK_DATES = list dates in WEEK_VTO_PICK_DATES. DOW_IN_RANGE = every Mon/Tue/… between start and end.'],
       ['WEEK_VTO_PICK_DATES',           '',                'Used when mode is PICK_DATES. Comma-separated dates, e.g. 2026-06-05, 2026-06-12'],
@@ -3449,7 +3546,8 @@ function rvtoMergeDeficitBlocks_(intervals, tz, now, rules, aggregateNetMap) {
   const gated = intervals.filter(function(it) {
     const key = it.site + '_' + it.startTime.getTime();
     if (!(key in aggregateNetMap)) return true;
-    return aggregateNetMap[key] >= 0;
+    const surplusFloor = rvtoEffectiveMinSurplusForQueue_(it.queue, rules);
+    return aggregateNetMap[key] >= surplusFloor;
   });
 
   const sorted = gated.slice().sort(function(a, b) {
@@ -3973,19 +4071,40 @@ function rvtoGetRoster_(ctx) {
     .filter(function(row) { return row.some(function(c) { return c !== ''; }); })
     .map(function(row) {
       const obj  = rvtoRowToObj_(headers, row);
-      const name = String(obj['Name'] || '').trim();
+      let name = String(obj['Name'] || '').trim();
+      if (!name) {
+        name = rvtoRosterNameFromHeaders_(headers, row);
+      }
       let email  = String(obj['Email'] || '').trim().toLowerCase();
       if (!email && name) email = rvtoDeriveEmail_(name);
+      var workGroup = String(obj['Work Group'] || '').trim();
+      var manager = String(obj['Manager'] || '').trim();
+      if (name && !workGroup && !manager && headers.length === 3) {
+        var legacyMgr = String(row[1] || '').trim();
+        var legacyWg  = String(row[2] || '').trim();
+        if (legacyMgr && legacyWg && legacyMgr.indexOf('@') === -1) {
+          manager = legacyMgr;
+          workGroup = legacyWg;
+        }
+      }
       return {
         name:            name,
         email:           email,
-        workGroup:       String(obj['Work Group'] || '').trim(),
-        manager:         String(obj['Manager']    || '').trim(),
+        workGroup:       workGroup,
+        manager:         manager,
         subGroup:        String(obj['Sub Group']  || '').trim(),
         functionalGroup: String(obj['Functional Group'] || '').trim()
       };
     })
     .filter(function(p) { return !!p.name && !!p.email; });
+}
+
+/** First-column rep name when header row lost "Name" (blank or whitespace label). */
+function rvtoRosterNameFromHeaders_(headers, row) {
+  if (!headers || !headers.length || !row) return '';
+  var h0 = String(headers[0] || '').trim();
+  if (h0 && h0 !== 'Name') return '';
+  return String(row[0] || '').trim();
 }
 
 function rvtoDeriveEmail_(name) {
@@ -4472,79 +4591,77 @@ function rvtoProcessResponse_(offerId, action, token) {
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) return { ok: false, message: 'No offers found.' };
 
-  const headers = values[0];
+  const headers = rvtoResolveOffersHeaders_(values[0]);
   const now     = new Date();
   const config  = rvtoGetConfig_();
 
-  for (var i = 1; i < values.length; i++) {
-    const obj = rvtoRowToObj_(headers, values[i]);
-    if (String(obj['Offer ID'] || '').trim() !== offerId) continue;
-    if (String(obj['Token']    || '').trim() !== token) return { ok: false, message: 'Invalid token.' };
+  const rowIdx = rvtoFindOfferSheetRowIndex_(values, offerId);
+  if (rowIdx === -1) return { ok: false, message: 'Offer not found.' };
 
-    const status = String(obj['Status'] || '').trim().toUpperCase();
+  const obj = rvtoRowToObj_(headers, values[rowIdx]);
+  if (String(obj['Token'] || '').trim() !== token) return { ok: false, message: 'Invalid token.' };
 
-    if ([RVTO_APP.OFFER_STATUSES.DECLINED, RVTO_APP.OFFER_STATUSES.EXPIRED].indexOf(status) !== -1) {
-      return { ok: false, message: 'This offer is no longer active.' };
-    }
+  const status = String(obj['Status'] || '').trim().toUpperCase();
 
-    if (status === RVTO_APP.OFFER_STATUSES.COMMITTED) {
-      return { ok: true, message: 'You have already accepted this offer - it has been recorded.' };
-    }
-
-    const sentAt       = obj['Sent At']    ? new Date(obj['Sent At'])    : null;
-    const expiresAtRaw = obj['Expires At'] ? new Date(obj['Expires At']) : null;
-    const holdHours    = Number(obj['Hold Hours'] || 1);
-    const effectiveExpiry = (expiresAtRaw && !isNaN(expiresAtRaw.getTime()))
-      ? expiresAtRaw : (sentAt ? rvtoAddHours_(sentAt, holdHours) : null);
-
-    if (effectiveExpiry && now >= effectiveExpiry) {
-      rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.EXPIRED);
-      rvtoUpdateOfferField_(offerId, 'Response Time',   now);
-      rvtoUpdateOfferField_(offerId, 'Response Action', 'expired_before_response');
-      return { ok: false, message: 'This offer has expired.' };
-    }
-
-    if (action === 'accept') {
-      if (status !== RVTO_APP.OFFER_STATUSES.ACCEPTED) {
-        rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.ACCEPTED);
-        rvtoUpdateOfferField_(offerId, 'Response Time',   now);
-        rvtoUpdateOfferField_(offerId, 'Response Action', 'accept');
-        rvtoUpdateOfferField_(offerId, 'Notes',           'Accepted by rep.');
-        rvtoAudit_('OFFER_ACCEPTED', offerId, 'Accepted by ' + obj['Email'], 'OK');
-      } else {
-        rvtoAudit_('OFFER_ACCEPTED', offerId, 'Re-accept attempt by ' + obj['Email'], 'INFO');
-      }
-
-      const commitEnabled = rvtoConfigBool_(config.ASSEMBLED_COMMIT, true);
-      if (commitEnabled) {
-        var commitResult;
-        try {
-          rvtoAudit_('ASSEMBLED_COMMIT_START', offerId, 'Attempting commit for ' + obj['Email'], 'INFO');
-          commitResult = rvtoCommitToAssembled_(offerId, obj, config);
-        } catch (commitErr) {
-          rvtoAudit_('ASSEMBLED_COMMIT', offerId, 'Unhandled exception: ' + String(commitErr), 'FAILED');
-          return { ok: false, message: 'Your acceptance was recorded but could not be written to Assembled.' };
-        }
-        return commitResult.ok
-          ? { ok: true,  message: 'Thanks! Your VTO has been accepted and recorded in the schedule.' }
-          : { ok: false, message: 'Your acceptance was recorded but could not be written to Assembled. Scheduling will follow up.' };
-      }
-      return { ok: true, message: 'Thanks! Your VTO has been recorded.' };
-    }
-
-    if (action === 'decline') {
-      rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.DECLINED);
-      rvtoUpdateOfferField_(offerId, 'Response Time',   now);
-      rvtoUpdateOfferField_(offerId, 'Response Action', 'decline');
-      rvtoUpdateOfferField_(offerId, 'Notes',           'Declined by rep.');
-      rvtoAudit_('OFFER_DECLINED', offerId, 'Declined by ' + obj['Email'], 'OK');
-      return { ok: true, message: 'Got it - you have declined this offer.' };
-    }
-
-    return { ok: false, message: 'Invalid action.' };
+  if ([RVTO_APP.OFFER_STATUSES.DECLINED, RVTO_APP.OFFER_STATUSES.EXPIRED].indexOf(status) !== -1) {
+    return { ok: false, message: 'This offer is no longer active.' };
   }
 
-  return { ok: false, message: 'Offer not found.' };
+  if (status === RVTO_APP.OFFER_STATUSES.COMMITTED) {
+    return { ok: true, message: 'You have already accepted this offer - it has been recorded.' };
+  }
+
+  const sentAt       = obj['Sent At']    ? new Date(obj['Sent At'])    : null;
+  const expiresAtRaw = obj['Expires At'] ? new Date(obj['Expires At']) : null;
+  const holdHours    = Number(obj['Hold Hours'] || 1);
+  const effectiveExpiry = (expiresAtRaw && !isNaN(expiresAtRaw.getTime()))
+    ? expiresAtRaw : (sentAt ? rvtoAddHours_(sentAt, holdHours) : null);
+
+  if (effectiveExpiry && now >= effectiveExpiry) {
+    rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.EXPIRED);
+    rvtoUpdateOfferField_(offerId, 'Response Time',   now);
+    rvtoUpdateOfferField_(offerId, 'Response Action', 'expired_before_response');
+    return { ok: false, message: 'This offer has expired.' };
+  }
+
+  if (action === 'accept') {
+    if (status !== RVTO_APP.OFFER_STATUSES.ACCEPTED) {
+      rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.ACCEPTED);
+      rvtoUpdateOfferField_(offerId, 'Response Time',   now);
+      rvtoUpdateOfferField_(offerId, 'Response Action', 'accept');
+      rvtoUpdateOfferField_(offerId, 'Notes',           'Accepted by rep.');
+      rvtoAudit_('OFFER_ACCEPTED', offerId, 'Accepted by ' + obj['Email'], 'OK');
+    } else {
+      rvtoAudit_('OFFER_ACCEPTED', offerId, 'Re-accept attempt by ' + obj['Email'], 'INFO');
+    }
+
+    const commitEnabled = rvtoConfigBool_(config.ASSEMBLED_COMMIT, true);
+    if (commitEnabled) {
+      var commitResult;
+      try {
+        rvtoAudit_('ASSEMBLED_COMMIT_START', offerId, 'Attempting commit for ' + obj['Email'], 'INFO');
+        commitResult = rvtoCommitToAssembled_(offerId, obj, config);
+      } catch (commitErr) {
+        rvtoAudit_('ASSEMBLED_COMMIT', offerId, 'Unhandled exception: ' + String(commitErr), 'FAILED');
+        return { ok: false, message: 'Your acceptance was recorded but could not be written to Assembled.' };
+      }
+      return commitResult.ok
+        ? { ok: true,  message: 'Thanks! Your VTO has been accepted and recorded in the schedule.' }
+        : { ok: false, message: 'Your acceptance was recorded but could not be written to Assembled. Scheduling will follow up.' };
+    }
+    return { ok: true, message: 'Thanks! Your VTO has been recorded.' };
+  }
+
+  if (action === 'decline') {
+    rvtoUpdateOfferField_(offerId, 'Status',          RVTO_APP.OFFER_STATUSES.DECLINED);
+    rvtoUpdateOfferField_(offerId, 'Response Time',   now);
+    rvtoUpdateOfferField_(offerId, 'Response Action', 'decline');
+    rvtoUpdateOfferField_(offerId, 'Notes',           'Declined by rep.');
+    rvtoAudit_('OFFER_DECLINED', offerId, 'Declined by ' + obj['Email'], 'OK');
+    return { ok: true, message: 'Got it - you have declined this offer.' };
+  }
+
+  return { ok: false, message: 'Invalid action.' };
 }
 
 function rvtoResponsePage_(message, isSuccess) {
@@ -5586,6 +5703,36 @@ function rvtoEnsureSpreadsheetIdProperty_() {
 /*************************************************************
  * OFFER SHEET HELPERS
  *************************************************************/
+
+function rvtoOffersColumnHeaders_() {
+  return [
+    'Offer ID', 'Deficit ID', 'Date', 'Start', 'End',
+    'Name', 'Email', 'Agent ID', 'Queue', 'Manager',
+    'Sent At', 'Expires At', 'Hold Hours', 'Status',
+    'Response Time', 'Response Action',
+    'Token', 'Accept URL', 'Decline URL',
+    'Assembled Request ID', 'Assembled Status', 'Assembled Response', 'Notes'
+  ];
+}
+
+/** Standard headers when row 1 was overwritten (e.g. accidental paste into Offers). */
+function rvtoResolveOffersHeaders_(firstRow) {
+  if (firstRow && String(firstRow[0] || '').trim() === 'Offer ID') {
+    return firstRow;
+  }
+  return rvtoOffersColumnHeaders_();
+}
+
+/** 1-based sheet row index for offer_id (column A), or -1. */
+function rvtoFindOfferSheetRowIndex_(values, offerId) {
+  var want = String(offerId || '').trim();
+  if (!want || !values || values.length <= 1) return -1;
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === want) return i;
+  }
+  return -1;
+}
+
 function rvtoAppendOfferRow_(o) {
   const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   if (!sheet) return;
@@ -5603,39 +5750,36 @@ function rvtoUpdateOfferField_(offerId, columnName, value) {
   const sheet  = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) return;
-  const headers = values[0];
+  const headers = rvtoResolveOffersHeaders_(values[0]);
   const col     = headers.indexOf(columnName);
   if (col === -1) return;
   const statusCol = headers.indexOf('Status');
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][headers.indexOf('Offer ID')] || '').trim() === offerId) {
-      var prevStatus = statusCol >= 0
-        ? String(values[i][statusCol] || '').trim().toUpperCase()
-        : '';
-      sheet.getRange(i + 1, col + 1).setValue(value);
-      if (
-        columnName === 'Status' &&
-        String(value || '').trim().toUpperCase() === RVTO_APP.OFFER_STATUSES.COMMITTED &&
-        prevStatus !== RVTO_APP.OFFER_STATUSES.COMMITTED
-      ) {
-        var obj = rvtoRowToObj_(headers, values[i]);
-        obj['Status'] = value;
-        rvtoOfferAlertNotify_('committed', obj, offerId);
-      } else if (
-        columnName === 'Status' &&
-        String(value || '').trim().toUpperCase() === RVTO_APP.OFFER_STATUSES.DECLINED &&
-        prevStatus !== RVTO_APP.OFFER_STATUSES.DECLINED
-      ) {
-        var objDecl = rvtoRowToObj_(headers, values[i]);
-        objDecl['Status'] = value;
-        rvtoOfferAlertNotify_('decline', objDecl, offerId);
-      }
-      return;
-    }
+  const rowIdx = rvtoFindOfferSheetRowIndex_(values, offerId);
+  if (rowIdx === -1) return;
+  var prevStatus = statusCol >= 0
+    ? String(values[rowIdx][statusCol] || '').trim().toUpperCase()
+    : '';
+  sheet.getRange(rowIdx + 1, col + 1).setValue(value);
+  if (
+    columnName === 'Status' &&
+    String(value || '').trim().toUpperCase() === RVTO_APP.OFFER_STATUSES.COMMITTED &&
+    prevStatus !== RVTO_APP.OFFER_STATUSES.COMMITTED
+  ) {
+    var obj = rvtoRowToObj_(headers, values[rowIdx]);
+    obj['Status'] = value;
+    rvtoOfferAlertNotify_('committed', obj, offerId);
+  } else if (
+    columnName === 'Status' &&
+    String(value || '').trim().toUpperCase() === RVTO_APP.OFFER_STATUSES.DECLINED &&
+    prevStatus !== RVTO_APP.OFFER_STATUSES.DECLINED
+  ) {
+    var objDecl = rvtoRowToObj_(headers, values[rowIdx]);
+    objDecl['Status'] = value;
+    rvtoOfferAlertNotify_('decline', objDecl, offerId);
   }
 }
 
-/** Install onEdit trigger for Offers Status → COMMITTED / DECLINED desktop alerts. */
+/** Install onEdit trigger for Offers Status edits (alerts + manual EXPIRED). */
 function rvtoInstallOfferAlertTrigger_() {
   ScriptApp.getProjectTriggers().forEach(function(t) {
     if (t.getHandlerFunction() === 'rvtoOnOffersEdit_') ScriptApp.deleteTrigger(t);
@@ -5646,32 +5790,54 @@ function rvtoInstallOfferAlertTrigger_() {
     .create();
 }
 
-/** Fires desktop alert when Offers Status column is set to COMMITTED or DECLINED. */
+/** Fires on Offers Status edits: manual EXPIRED, COMMITTED/DECLINED desktop alerts. */
 function rvtoOnOffersEdit_(e) {
   try {
     if (!e || !e.range) return;
     var sheet = e.range.getSheet();
     if (sheet.getName() !== RVTO_APP.SHEETS.OFFERS) return;
-    if (e.range.getColumn() !== 14) return;
-    var next = String(e.value || '').trim().toUpperCase();
-    var prev = String(e.oldValue || '').trim().toUpperCase();
-    if (next === prev) return;
-    var action = null;
-    if (next === RVTO_APP.OFFER_STATUSES.COMMITTED && prev !== RVTO_APP.OFFER_STATUSES.COMMITTED) {
-      action = 'committed';
-    } else if (next === RVTO_APP.OFFER_STATUSES.DECLINED && prev !== RVTO_APP.OFFER_STATUSES.DECLINED) {
-      action = 'decline';
+
+    var headerRow = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var headers = rvtoResolveOffersHeaders_(headerRow);
+    var statusCol = headers.indexOf('Status') + 1;
+    if (statusCol <= 0) return;
+    if (e.range.getColumn() !== statusCol) return;
+
+    var numRows = e.range.getNumRows();
+    for (var r = 0; r < numRows; r++) {
+      var row = e.range.getRow() + r;
+      if (row <= 1) continue;
+
+      var nextRaw = (numRows === 1 && r === 0 && e.value !== undefined)
+        ? e.value
+        : sheet.getRange(row, statusCol).getValue();
+      var next = String(nextRaw || '').trim().toUpperCase();
+      var prevRaw = (numRows === 1 && r === 0 && e.oldValue !== undefined)
+        ? e.oldValue
+        : '';
+      var prev = String(prevRaw || '').trim().toUpperCase();
+      if (next === prev) continue;
+
+      if (next === RVTO_APP.OFFER_STATUSES.EXPIRED) {
+        rvtoApplyManualOfferExpiry_(sheet, row, headers);
+        continue;
+      }
+
+      var action = null;
+      if (next === RVTO_APP.OFFER_STATUSES.COMMITTED && prev !== RVTO_APP.OFFER_STATUSES.COMMITTED) {
+        action = 'committed';
+      } else if (next === RVTO_APP.OFFER_STATUSES.DECLINED && prev !== RVTO_APP.OFFER_STATUSES.DECLINED) {
+        action = 'decline';
+      }
+      if (!action) continue;
+
+      var lastCol = sheet.getLastColumn();
+      var rowValues = sheet.getRange(row, 1, row, lastCol).getValues()[0];
+      var obj = rvtoRowToObj_(headers, rowValues);
+      var offerId = String(obj['Offer ID'] || '').trim();
+      if (!offerId) continue;
+      rvtoOfferAlertNotify_(action, obj, offerId);
     }
-    if (!action) return;
-    var row = e.range.getRow();
-    if (row <= 1) return;
-    var lastCol = sheet.getLastColumn();
-    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    var rowValues = sheet.getRange(row, 1, row, lastCol).getValues()[0];
-    var obj = rvtoRowToObj_(headers, rowValues);
-    var offerId = String(obj['Offer ID'] || '').trim();
-    if (!offerId) return;
-    rvtoOfferAlertNotify_(action, obj, offerId);
   } catch (err) {
     /* never disrupt sheet edits */
   }
@@ -5939,6 +6105,80 @@ function rvtoFormatSheets_() {
       .setFontColor('#ffffff');
     sheet.autoResizeColumns(1, sheet.getLastColumn());
   });
+  rvtoApplyOffersStatusValidation_();
+}
+
+/** Status dropdown on Offers — includes EXPIRED for manual link kill. */
+function rvtoApplyOffersStatusValidation_() {
+  const sheet = rvtoGetSpreadsheet_().getSheetByName(RVTO_APP.SHEETS.OFFERS);
+  if (!sheet) return;
+  const headers = rvtoOffersColumnHeaders_();
+  const statusCol = headers.indexOf('Status') + 1;
+  if (statusCol <= 0) return;
+  const lastRow = Math.max(sheet.getLastRow(), 500);
+  const rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([
+      RVTO_APP.OFFER_STATUSES.PENDING_SEND,
+      RVTO_APP.OFFER_STATUSES.SENT,
+      RVTO_APP.OFFER_STATUSES.SEND_FAILED,
+      RVTO_APP.OFFER_STATUSES.ACCEPTED,
+      RVTO_APP.OFFER_STATUSES.COMMITTED,
+      RVTO_APP.OFFER_STATUSES.DECLINED,
+      RVTO_APP.OFFER_STATUSES.EXPIRED,
+      RVTO_APP.OFFER_STATUSES.COMMIT_FAILED
+    ], true)
+    .setAllowInvalid(true)
+    .build();
+  sheet.getRange(2, statusCol, lastRow, statusCol).setDataValidation(rule);
+}
+
+/**
+ * When ops sets Status to EXPIRED on the Offers tab, kill the link (doGet checks Status first).
+ */
+function rvtoApplyManualOfferExpiry_(sheet, row, headers) {
+  if (!sheet || row <= 1) return;
+  headers = headers || rvtoResolveOffersHeaders_(sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]);
+  const lastCol = Math.max(headers.length, sheet.getLastColumn());
+  const rowValues = sheet.getRange(row, 1, row, lastCol).getValues()[0];
+  const obj = rvtoRowToObj_(headers, rowValues);
+  const prev = String(obj['Status'] || '').trim().toUpperCase();
+  if (prev === RVTO_APP.OFFER_STATUSES.EXPIRED) return;
+  if ([RVTO_APP.OFFER_STATUSES.COMMITTED, RVTO_APP.OFFER_STATUSES.ACCEPTED].indexOf(prev) !== -1) {
+    return;
+  }
+
+  const now = new Date();
+  const col = function(name) { return headers.indexOf(name); };
+
+  if (col('Status') >= 0) {
+    sheet.getRange(row, col('Status') + 1).setValue(RVTO_APP.OFFER_STATUSES.EXPIRED);
+  }
+  if (col('Expires At') >= 0) {
+    sheet.getRange(row, col('Expires At') + 1).setValue(now);
+  }
+  if (col('Response Time') >= 0 && !obj['Response Time']) {
+    sheet.getRange(row, col('Response Time') + 1).setValue(now);
+  }
+  if (col('Response Action') >= 0) {
+    var actionCell = sheet.getRange(row, col('Response Action') + 1);
+    if (!String(actionCell.getValue() || '').trim()) {
+      actionCell.setValue('manual_expire');
+    }
+  }
+  if (col('Notes') >= 0) {
+    var existingNotes = String(obj['Notes'] || '').trim();
+    var msg = 'Manually expired in sheet.';
+    if (existingNotes.indexOf(msg) === -1) {
+      sheet.getRange(row, col('Notes') + 1).setValue(
+        existingNotes ? (existingNotes + ' | ' + msg) : msg
+      );
+    }
+  }
+
+  const offerId = String(obj['Offer ID'] || '').trim();
+  if (offerId) {
+    rvtoAudit_('MANUAL_EXPIRE', offerId, 'Offers Status set to EXPIRED — link disabled', 'OK');
+  }
 }
 
 /*************************************************************

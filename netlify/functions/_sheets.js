@@ -262,6 +262,7 @@ module.exports = {
   getSheetsClient,
   getSheetValues,
   resolveSpreadsheetTabTitle,
+  parseServiceAccountJson,
   parseSheetNumber,
   normalizeDateCell,
   ok,
