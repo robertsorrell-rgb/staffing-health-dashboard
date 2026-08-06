@@ -73,6 +73,12 @@ exports.handler = async (event) => {
     }
   }
 
+  const nerdDeskRollupYesterday =
+    nerdDeskMeta?.rollup_yesterday && targetedSource === 'nerddesk' ? nerdDeskMeta.rollup_yesterday : null;
+  const nerdDeskRollupWeek =
+    nerdDeskMeta?.rollup_week && targetedSource === 'nerddesk' ? nerdDeskMeta.rollup_week : null;
+  const nerdDeskWeekMeta = nerdDeskMeta?.week_meta || null;
+
   if (useSheetTargeted && targetedSpreadsheetId) {
     try {
       const r = await readSheetFilterToday(targetedSpreadsheetId, offersTab, 'A1:ZZ20000', {
@@ -131,7 +137,12 @@ exports.handler = async (event) => {
   let weekTargetedError = null;
   let weekAutoError = null;
 
-  if (targetedSpreadsheetId) {
+  if (nerdDeskRollupWeek) {
+    rollupWeek = nerdDeskRollupWeek;
+    if (nerdDeskWeekMeta?.week_start) weekMeta.week_start = nerdDeskWeekMeta.week_start;
+    if (nerdDeskWeekMeta?.week_end) weekMeta.week_end = nerdDeskWeekMeta.week_end;
+    if (nerdDeskWeekMeta?.label) weekMeta.label = nerdDeskWeekMeta.label;
+  } else if (targetedSpreadsheetId && !(useNerdDeskTargeted && targetedSource === 'nerddesk')) {
     try {
       const rw = await readSheetFilterWeek(
         targetedSpreadsheetId,
@@ -197,7 +208,11 @@ exports.handler = async (event) => {
   let autoYesterdayDateColumnUsed = null;
   let autoYesterdayError = null;
 
-  if (targetedSpreadsheetId) {
+  if (nerdDeskRollupYesterday) {
+    rollupYesterday = nerdDeskRollupYesterday;
+    targetedRowsYesterday =
+      rollupYesterday.committed_offers_today + rollupYesterday.offers_other_status_today;
+  } else if (targetedSpreadsheetId && !(useNerdDeskTargeted && targetedSource === 'nerddesk')) {
     try {
       const ry = await readSheetFilterToday(targetedSpreadsheetId, offersTab, 'A1:ZZ20000', {
         preferDateHeaders: ['Date', 'date'],
