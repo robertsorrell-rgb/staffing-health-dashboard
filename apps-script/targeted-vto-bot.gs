@@ -1,11 +1,15 @@
 /*************************************************************
- * TARGETED VTO BOT v1.11.10
+ * TARGETED VTO BOT v1.11.11
  * Mirrors the VTO engine pattern exactly:
  *   1. Poll Assembled net staffing
  *   2. Find surplus windows (net >= threshold) — VTO opportunity
  *   3. Match eligible reps (right queue + scheduled + not on no-fly)
  *   4. Send offer via email and/or Slack DM (Accept / Decline links)
  *   5. doGet handles response -> writes VTO activity to Assembled
+ *
+ * CHANGELOG v1.11.11
+ *   - NEW: Slack DMs (offer pings + manager commit notifies) lead with <@USERID>
+ *     so Slack treats them as mentions (louder than a quiet app DM toast).
  *
  * CHANGELOG v1.11.10
  *   - NEW: Setting Offers tab Status (column N) to EXPIRED manually invalidates Accept/Decline
@@ -584,7 +588,7 @@
  * CONSTANTS
  *************************************************************/
 const RVTO_APP = {
-  VERSION: 'V1.11.10',
+  VERSION: 'V1.11.11',
   BASE_URL: 'https://api.assembledhq.com/v0',
 
   SHEETS: {
@@ -5921,6 +5925,18 @@ function rvtoGetSlackUserId_(alias) {
 }
 
 /**
+ * Lead Slack DMs with <@U…> so Slack treats them as mentions
+ * (louder than a quiet app DM toast).
+ */
+function rvtoWithRecipientMention_(userId, message) {
+  var body = String(message == null ? '' : message);
+  var id = String(userId || '').trim();
+  if (!id || !body) return body;
+  if (body.indexOf('<@' + id + '>') !== -1) return body;
+  return '<@' + id + '> ' + body;
+}
+
+/**
  * Sends a Slack DM to a user by their Slack user ID. Returns true on success.
  */
 function rvtoSendSlackDmReturningOk_(userId, message) {
@@ -5930,6 +5946,7 @@ function rvtoSendSlackDmReturningOk_(userId, message) {
       rvtoAudit_('SLACK_DM', '', 'SLACK_BOT_TOKEN not set in Script Properties', 'WARN');
       return false;
     }
+    const outbound = rvtoWithRecipientMention_(userId, message);
     const openRes = UrlFetchApp.fetch('https://slack.com/api/conversations.open', {
       method: 'post',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -5944,7 +5961,7 @@ function rvtoSendSlackDmReturningOk_(userId, message) {
     const msgRes = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
       method: 'post',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-      payload: JSON.stringify({ channel: openData.channel.id, text: message }),
+      payload: JSON.stringify({ channel: openData.channel.id, text: outbound }),
       muteHttpExceptions: true
     });
     const msgData = JSON.parse(msgRes.getContentText());
