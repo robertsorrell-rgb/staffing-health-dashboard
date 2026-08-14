@@ -1,11 +1,15 @@
 /*************************************************************
- * TARGETED VTO BOT v1.11.11
+ * TARGETED VTO BOT v1.11.12
  * Mirrors the VTO engine pattern exactly:
  *   1. Poll Assembled net staffing
  *   2. Find surplus windows (net >= threshold) — VTO opportunity
  *   3. Match eligible reps (right queue + scheduled + not on no-fly)
  *   4. Send offer via email and/or Slack DM (Accept / Decline links)
  *   5. doGet handles response -> writes VTO activity to Assembled
+ *
+ * CHANGELOG v1.11.12
+ *   - FIX: Slack mention pings use <@ID|Display Name> (from Slack profile) so consultants
+ *     see a real @name — never a raw <@U…> string. Invalid IDs skip mention markup entirely.
  *
  * CHANGELOG v1.11.11
  *   - NEW: Slack DMs (offer pings + manager commit notifies) lead with <@USERID>
@@ -588,7 +592,7 @@
  * CONSTANTS
  *************************************************************/
 const RVTO_APP = {
-  VERSION: 'V1.11.11',
+  VERSION: 'V1.11.12',
   BASE_URL: 'https://api.assembledhq.com/v0',
 
   SHEETS: {
@@ -4152,20 +4156,30 @@ function rvtoSlackMrkdwnLink_(url, label) {
 
 /**
  * Rep DM, or operator DM when VTO_OFFER_PREVIEW_MODE is COPY_ONLY.
- * Returns { userId, preview, targetEmail } or null.
+ * Returns { userId, displayName, preview, targetEmail } or null.
  */
 function rvtoResolveSlackRecipientForOffer_(repEmail, config) {
   var rep = String(repEmail || '').trim().toLowerCase();
   if (!rep) return null;
   var pv = rvtoGetOfferPreviewSettings_(config || {});
   if (pv.active && pv.mode === 'COPY_ONLY') {
-    var previewId = rvtoGetSlackUserId_(pv.email);
-    if (!previewId) return null;
-    return { userId: previewId, preview: true, targetEmail: pv.email };
+    var previewUser = rvtoGetSlackUser_(pv.email);
+    if (!previewUser || !previewUser.userId) return null;
+    return {
+      userId: previewUser.userId,
+      displayName: previewUser.displayName,
+      preview: true,
+      targetEmail: pv.email
+    };
   }
-  var userId = rvtoGetSlackUserId_(rep);
-  if (!userId) return null;
-  return { userId: userId, preview: false, targetEmail: rep };
+  var user = rvtoGetSlackUser_(rep);
+  if (!user || !user.userId) return null;
+  return {
+    userId: user.userId,
+    displayName: user.displayName,
+    preview: false,
+    targetEmail: rep
+  };
 }
 
 function rvtoOfferDeliverySucceeded_(slackOk, emailOk, ch) {
@@ -4209,7 +4223,7 @@ function rvtoSendOfferSlackDm_(opts) {
       message;
   }
 
-  var ok = rvtoSendSlackDmReturningOk_(recipient.userId, message);
+  var ok = rvtoSendSlackDmReturningOk_(recipient.userId, message, recipient.displayName);
   var dest = recipient.preview ? ('preview ' + recipient.targetEmail) : repEmail;
   rvtoAudit_('SEND_SLACK', refId,
     (ok ? 'Slack DM to ' : 'Slack DM failed for ') + dest + ' [' + kind + ']' +
@@ -5899,10 +5913,11 @@ function rvtoGetManagerForRep_(repEmail) {
 }
 
 /**
- * Resolves a Slack user ID from a varsitytutors.com alias.
+ * Resolves Slack user id + display name from a varsitytutors.com alias.
  * Mirrors the adherence bot pattern exactly.
+ * @returns {{ userId: string, displayName: string|null }|null}
  */
-function rvtoGetSlackUserId_(alias) {
+function rvtoGetSlackUser_(alias) {
   const email = alias.indexOf('@') !== -1 ? alias : (alias + '@varsitytutors.com');
   try {
     const token = (PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN') || '').trim();
@@ -5916,37 +5931,61 @@ function rvtoGetSlackUserId_(alias) {
       muteHttpExceptions: true
     });
     const data = JSON.parse(resp.getContentText());
-    if (data.ok) return data.user.id;
-    rvtoAudit_('SLACK_DM', '', 'Slack lookup failed for ' + email + ': ' + data.error, 'WARN');
+    if (!data.ok || !data.user || !data.user.id) {
+      rvtoAudit_('SLACK_DM', '', 'Slack lookup failed for ' + email + ': ' + (data.error || 'no_user'), 'WARN');
+      return null;
+    }
+    var profile = data.user.profile || {};
+    var displayName =
+      profile.display_name_normalized ||
+      profile.display_name ||
+      profile.real_name_normalized ||
+      profile.real_name ||
+      data.user.real_name ||
+      data.user.name ||
+      null;
+    return { userId: data.user.id, displayName: displayName };
   } catch (err) {
     rvtoAudit_('SLACK_DM', '', 'Slack lookup exception for ' + email + ': ' + String(err), 'WARN');
   }
   return null;
 }
 
+function rvtoGetSlackUserId_(alias) {
+  var hit = rvtoGetSlackUser_(alias);
+  return hit && hit.userId ? hit.userId : null;
+}
+
 /**
- * Lead Slack DMs with <@U…> so Slack treats them as mentions
- * (louder than a quiet app DM toast).
+ * Lead Slack DMs with a mention so alerts are louder than a quiet app toast.
+ * Uses <@ID|Display Name> so clients show a real @name — never a raw <@U…> dump.
+ * Skips mention markup entirely if the id is not a valid Slack user id.
  */
-function rvtoWithRecipientMention_(userId, message) {
+function rvtoWithRecipientMention_(userId, message, displayName) {
   var body = String(message == null ? '' : message);
   var id = String(userId || '').trim();
-  if (!id || !body) return body;
-  if (body.indexOf('<@' + id + '>') !== -1) return body;
-  return '<@' + id + '> ' + body;
+  if (!body || !/^U[A-Z0-9]{6,}$/i.test(id)) return body;
+  if (body.indexOf('<@' + id) !== -1) return body;
+  var label = String(displayName || '')
+    .replace(/[<>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, 64);
+  var mention = label ? ('<@' + id + '|' + label + '>') : ('<@' + id + '>');
+  return mention + ' ' + body;
 }
 
 /**
  * Sends a Slack DM to a user by their Slack user ID. Returns true on success.
  */
-function rvtoSendSlackDmReturningOk_(userId, message) {
+function rvtoSendSlackDmReturningOk_(userId, message, displayName) {
   try {
     const token   = (PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN') || '').trim();
     if (!token) {
       rvtoAudit_('SLACK_DM', '', 'SLACK_BOT_TOKEN not set in Script Properties', 'WARN');
       return false;
     }
-    const outbound = rvtoWithRecipientMention_(userId, message);
+    const outbound = rvtoWithRecipientMention_(userId, message, displayName);
     const openRes = UrlFetchApp.fetch('https://slack.com/api/conversations.open', {
       method: 'post',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -5977,8 +6016,8 @@ function rvtoSendSlackDmReturningOk_(userId, message) {
 }
 
 /** Manager commit notify — void wrapper. */
-function rvtoSendSlackDm_(userId, message) {
-  rvtoSendSlackDmReturningOk_(userId, message);
+function rvtoSendSlackDm_(userId, message, displayName) {
+  rvtoSendSlackDmReturningOk_(userId, message, displayName);
 }
 
 /**
@@ -6010,10 +6049,10 @@ function rvtoNotifyManagerOnCommit_(repEmail, repName, message, config) {
       return;
     }
 
-    const userId = rvtoGetSlackUserId_(alias);
-    if (!userId) return; // already audited inside rvtoGetSlackUserId_
+    const slackUser = rvtoGetSlackUser_(alias);
+    if (!slackUser || !slackUser.userId) return; // already audited inside rvtoGetSlackUser_
 
-    rvtoSendSlackDm_(userId, message);
+    rvtoSendSlackDm_(slackUser.userId, message, slackUser.displayName || managerName);
     rvtoAudit_('SLACK_DM', '', 'Manager notify sent to ' + managerName + ' for ' + repName, 'OK');
   } catch (err) {
     rvtoAudit_('SLACK_DM', '', 'Unhandled exception in rvtoNotifyManagerOnCommit_: ' + String(err), 'WARN');
